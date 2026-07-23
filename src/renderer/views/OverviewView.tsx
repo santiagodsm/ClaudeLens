@@ -39,9 +39,17 @@ import {
   suppressedBucketCount,
 } from './shared/disclosures';
 import { SeriesLegend } from './shared/SeriesLegend';
+import { SegmentedControl } from './shared/SegmentedControl';
 
 /** §6.3 — "26-week activity calendar heatmap". */
 const CALENDAR_WEEKS = 26;
+
+/** Stacked (composition + total) vs separate zero-based areas (head-to-head). User request 2026-07-23. */
+type StackMode = 'stacked' | 'separate';
+const STACK_OPTIONS: readonly { value: StackMode; label: string }[] = [
+  { value: 'stacked', label: 'Stacked' },
+  { value: 'separate', label: 'Separate' },
+];
 
 /** §6.3's empty copy, verbatim. */
 export const OVERVIEW_EMPTY_REASON = 'No transcripts found in this directory yet';
@@ -64,6 +72,7 @@ export function OverviewView(): JSX.Element {
   const timeline = useQuery('q:modelMixTimeline', { ...filter, bucket: 'week' });
 
   const [hidden, setHidden] = useState<ReadonlySet<string>>(new Set());
+  const [stackMode, setStackMode] = useState<StackMode>('stacked');
   const toggle = (model: string): void => {
     setHidden((current) => {
       const next = new Set(current);
@@ -116,6 +125,15 @@ export function OverviewView(): JSX.Element {
             empty={timeline.data !== null && timeline.data.series.length === 0}
             emptyReason="no assistant events in this range"
             onRetry={timeline.refetch}
+            control={
+              <SegmentedControl
+                label="Stack models"
+                options={STACK_OPTIONS}
+                value={stackMode}
+                onChange={setStackMode}
+                data-testid="model-mix-stack-toggle"
+              />
+            }
             legend={
               timeline.data === null ? undefined : (
                 <SeriesLegend
@@ -137,6 +155,7 @@ export function OverviewView(): JSX.Element {
               <ModelAreaChart
                 timeline={timeline.data}
                 hidden={hidden}
+                stacked={stackMode === 'stacked'}
                 suppressedBuckets={suppressedBucketCount(timeline.data.buckets, partialBefore)}
                 unit="events"
               />

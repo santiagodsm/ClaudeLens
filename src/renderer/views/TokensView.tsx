@@ -69,6 +69,13 @@ const RANGE_OPTIONS: readonly { value: RangePreset; label: string }[] = [
 ];
 const DAY_MS = 86_400_000;
 
+/** Stacked (composition + total) vs separate zero-based areas (head-to-head). User request 2026-07-23. */
+type StackMode = 'stacked' | 'separate';
+const STACK_OPTIONS: readonly { value: StackMode; label: string }[] = [
+  { value: 'stacked', label: 'Stacked' },
+  { value: 'separate', label: 'Separate' },
+];
+
 export function TokensView(): JSX.Element {
   const filter = useAppStore((state) => state.filter);
   const setFilter = useAppStore((state) => state.setFilter);
@@ -82,6 +89,7 @@ export function TokensView(): JSX.Element {
   const [by, setBy] = useState<CostBreakdownBy>('model');
   const [bucket, setBucket] = useState<TimelineBucket>('day');
   const [range, setRange] = useState<RangePreset>('all');
+  const [stackMode, setStackMode] = useState<StackMode>('stacked');
   const [hidden, setHidden] = useState<ReadonlySet<string>>(new Set());
   // The unit id of the project whose detail drawer is open; `null` = closed. Opened by a treemap
   // tile (below) — the same drawer a Projects & Code card opens (§6.4/§6.8, one destination).
@@ -338,6 +346,13 @@ export function TokensView(): JSX.Element {
                 onChange={applyRange}
                 data-testid="timeline-range-toggle"
               />
+              <SegmentedControl
+                label="Stack models"
+                options={STACK_OPTIONS}
+                value={stackMode}
+                onChange={setStackMode}
+                data-testid="timeline-stack-toggle"
+              />
             </div>
           }
           legend={
@@ -363,6 +378,7 @@ export function TokensView(): JSX.Element {
             <ModelAreaChart
               timeline={timeline.data}
               hidden={hidden}
+              stacked={stackMode === 'stacked'}
               suppressedBuckets={suppressedBucketCount(timeline.data.buckets, partialBefore)}
               unit="tokens"
               partialLabel={partialLabel}
