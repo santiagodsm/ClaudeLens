@@ -247,6 +247,50 @@ describe('F-16 — grouping changes the active-time partition, not the numbers u
     expect(fixture.groups.list()).toHaveLength(0);
   });
 
+  it('by-project cost rows carry the project or group NAME, never the numeric unit id (§1a)', async () => {
+    // Regression: `q:costBreakdown` grouped by project keys on the numeric project-unit id
+    // (ADR-040). That id is fine for row identity but must NEVER reach the screen (§1a). The bug
+    // rendered the raw id in the "Project" column; the fix resolves it to the display name.
+    assertTimezonePinned();
+    const fixture = await loadFixture(sandbox, 'f16-moved-project');
+    const context = at(15);
+
+    // Price the one model this fixture uses, so costBreakdown returns costed groups (INV-09).
+    const insertRate = fixture.db.prepare(
+      `INSERT INTO price_rows (model, token_class, rate_picousd_per_token, valid_from, valid_to,
+         source, created_at, updated_at)
+       VALUES (?, ?, 1000000, 0, NULL, 'manual', 0, 0)`,
+    );
+    for (const cls of ['input', 'output', 'cache_write', 'cache_read']) {
+      insertRate.run('claude-test-1', cls);
+    }
+
+    const names = new Set(
+      fixture.db
+        .prepare<{ display_name: string }>('SELECT display_name FROM projects')
+        .all()
+        .map((row) => row.display_name),
+    );
+
+    // Ungrouped — two separate projects. Each `key` is a bare numeric id (what used to leak);
+    // each `label` is the project's display name.
+    const ungrouped = fixture.analytics.costBreakdown(context, 'project').rows;
+    expect(ungrouped).toHaveLength(2);
+    for (const row of ungrouped) {
+      expect(row.key).toMatch(/^-?\d+$/); // the numeric unit id — NOT for the screen
+      expect(row.label).not.toBe(row.key);
+      expect(names.has(row.label)).toBe(true);
+    }
+
+    // Grouped — one row for the unit the user named. `label` is the group's name; `key` is the
+    // negative group-unit id.
+    const groupId = groupTheTwoFolders(fixture);
+    const grouped = fixture.analytics.costBreakdown(context, 'project').rows;
+    expect(grouped).toHaveLength(1);
+    expect(grouped[0]?.key).toBe(String(unitIdOf(groupId)));
+    expect(grouped[0]?.label).toBe('Family App');
+  });
+
   it('survives a purge and rebuild, because membership keys on encoded_name (§3.19)', async () => {
     assertTimezonePinned();
     const fixture = await loadFixture(sandbox, 'f16-moved-project');

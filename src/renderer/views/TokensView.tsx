@@ -238,7 +238,8 @@ export function TokensView(): JSX.Element {
                     {
                       id: 'key',
                       header: by === 'model' ? 'Model' : 'Project',
-                      render: (row) => row.key,
+                      // §1a — show the display name (row.label), never the numeric unit id (row.key).
+                      render: (row) => row.label,
                     },
                     {
                       id: 'input',

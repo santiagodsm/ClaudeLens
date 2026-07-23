@@ -133,8 +133,18 @@ export function tokensByProject(overrides: Partial<TokensByProject> = {}): Token
 export function costBreakdown(overrides: Partial<CostBreakdown> = {}): CostBreakdown {
   return {
     rows: [
-      { key: 'claude-test-1', costNanoUsd: 10_000_000_000, tokensByClass: tokens() },
-      { key: 'claude-test-2', costNanoUsd: 2_340_000_000, tokensByClass: tokens() },
+      {
+        key: 'claude-test-1',
+        label: 'claude-test-1',
+        costNanoUsd: 10_000_000_000,
+        tokensByClass: tokens(),
+      },
+      {
+        key: 'claude-test-2',
+        label: 'claude-test-2',
+        costNanoUsd: 2_340_000_000,
+        tokensByClass: tokens(),
+      },
     ],
     uncosted: NO_UNCOSTED,
     ...overrides,

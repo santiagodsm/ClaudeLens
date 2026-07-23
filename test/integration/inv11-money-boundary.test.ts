@@ -256,6 +256,7 @@ describe('§3.11 / INV-11 — a picoUSD total past MAX_SAFE_INTEGER reaches the 
     expect(breakdown.data.rows).toEqual([
       {
         key: 'claude-costly-3',
+        label: 'claude-costly-3', // model grouping: label === key
         // 1_040_500 × 50_000_000_001 = 52_025_000_001_040_500 pico → 52_025_000_001_041 nano
         costNanoUsd: NANO_GAMMA,
         tokensByClass: {
@@ -268,6 +269,7 @@ describe('§3.11 / INV-11 — a picoUSD total past MAX_SAFE_INTEGER reaches the 
       },
       {
         key: 'claude-costly-2',
+        label: 'claude-costly-2', // model grouping: label === key
         // 960_500 × 50_000_000_001 = 48_025_000_000_960_500 pico → 48_025_000_000_961 nano
         costNanoUsd: NANO_BETA,
         tokensByClass: {
@@ -280,6 +282,7 @@ describe('§3.11 / INV-11 — a picoUSD total past MAX_SAFE_INTEGER reaches the 
       },
       {
         key: 'claude-costly-1',
+        label: 'claude-costly-1', // model grouping: label === key
         // 890_500 × 50_000_000_001 = 44_525_000_000_890_500 pico → 44_525_000_000_891 nano
         costNanoUsd: NANO_ALPHA,
         tokensByClass: {

@@ -112,6 +112,7 @@ describe('§4.5 / §4.6 — every q:* channel returns its contract shape over re
     expect(breakdown.rows).toEqual([
       {
         key: 'claude-test-1',
+        label: 'claude-test-1', // model grouping: label === key
         costNanoUsd: 1_888_000,
         tokensByClass: {
           input: 128,

@@ -187,8 +187,15 @@ export class AnalyticsRepository {
 
   /** `q:costBreakdown` (§6.4) — grouped M-05 with its M-06 disclosure (INV-10). */
   costBreakdown(context: QueryContext, by: CostBreakdownBy): CostBreakdown {
+    // §1a — the project grouping keys on the numeric project-unit id (ADR-040), which must never
+    // reach the screen. Resolve each id to its display name (or group name) here; model/day are
+    // already human-readable, so their label IS their key.
+    const unitNames = by === 'project' ? this.#groups.unitNames() : null;
+    const labelFor = (key: string): string =>
+      unitNames === null ? key : (unitNames.get(Number(key))?.displayName ?? key);
     const rows = this.#cost.totalsGroupedBy(context.filter, by).map((group) => ({
       key: group.key,
+      label: labelFor(group.key),
       costNanoUsd: assertSafeAggregate(picoToNanoUsd(group.costPicoUsd), 'costNanoUsd'),
       tokensByClass: {
         input: group.tokInput,
@@ -451,11 +458,11 @@ export class AnalyticsRepository {
     // A pair that IS declared keeps its declared edge and is not duplicated: `designed` is a
     // claim about the configuration, and the configuration declares it. The runtime count for
     // such a pair is already on the declared edge's `observed`.
-    const declaredPairs = new Set(graphEdges.map((edge) => `${edge.source} ${edge.target}`));
+    const declaredPairs = new Set(graphEdges.map((edge) => `${edge.source}\0${edge.target}`));
     for (const edge of this.#graphs.observedRuntimeEdges()) {
       const source = `n${String(edge.fromId)}`;
       const target = `n${String(edge.toId)}`;
-      if (declaredPairs.has(`${source} ${target}`)) continue;
+      if (declaredPairs.has(`${source}\0${target}`)) continue;
       graphEdges.push({
         // ADR-039 — the edge KIND is part of the id. Three observed rules now feed this loop and
         // `@xyflow/react` keys on `id`; two rules producing the same pair with different kinds

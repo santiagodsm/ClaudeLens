@@ -574,7 +574,12 @@ export type CostBreakdownBy = 'model' | 'project' | 'day';
 
 /** §4.5 `q:costBreakdown` (§6.4) */
 export interface CostBreakdown {
-  rows: { key: string; costNanoUsd: number; tokensByClass: TokenBreakdown }[];
+  /**
+   * `key` is the stable grouping id (model string, local day, or numeric project-unit id) — used
+   * for row identity. `label` is what to SHOW: for `by: 'project'` it is the project/group name,
+   * never the raw numeric unit id (§1a — no internal id on screen). For model/day the two match.
+   */
+  rows: { key: string; label: string; costNanoUsd: number; tokensByClass: TokenBreakdown }[];
   uncosted: UncostedSummary; // INV-10
 }
 
