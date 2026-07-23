@@ -1,6 +1,7 @@
 /**
  * §6.2 — the shell, always present. Sidebar + top bar + a 12-column content area, max-width
- * 1480 px, centred, 24 px gutter, `overflow-y: auto`.
+ * 1480 px, centred, 24 px gutter, `overflow-y: auto`. ⚠️ Exception: the Graphs view (§6.7) is a
+ * full-bleed canvas and drops the width cap to use the whole area, so wide graphs render larger.
  *
  * The shell decides which of four things occupies the content area, in this order:
  *   1. **FATAL** (§6.11) — replaces the whole content area. There is no "reset the database"
@@ -34,6 +35,9 @@ import { LoadingState } from '../components/LoadingState';
 
 export function AppShell(): JSX.Element {
   const location = useLocation();
+  // §6.7 — the Graphs view is a **full-bleed canvas**, so it uses the whole content width
+  // instead of the §6.2 1480 px reading-column cap. Every other view stays capped and centred.
+  const isGraphs = location.pathname.startsWith('/graphs');
   const dirStatus = useAppStore((state) => state.dirStatus);
   const bootstrap = useAppStore((state) => state.bootstrap);
   const bootstrapError = useAppStore((state) => state.bootstrapError);
@@ -63,7 +67,10 @@ export function AppShell(): JSX.Element {
         >
           <div
             className="mx-auto grid w-full grid-cols-12"
-            style={{ maxWidth: 'var(--content-max-w)', gap: 'var(--grid-gutter)' }}
+            style={{
+              maxWidth: isGraphs ? 'none' : 'var(--content-max-w)',
+              gap: 'var(--grid-gutter)',
+            }}
           >
             {fatal !== null ? (
               <FatalSurface />
