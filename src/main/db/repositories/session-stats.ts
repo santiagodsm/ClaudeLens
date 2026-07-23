@@ -521,34 +521,39 @@ export class SessionStatsRepository extends Repository {
   }
 
   /**
-   * §6.4 (A-11) — the heaviest sessions by cache-read tokens, most first.
+   * §6.4 (A-11, A-12) — the sessions the panel needs: the heaviest by cache-read tokens UNION the
+   * most-recently-active, deduped. Ordered cache-read DESC in the result.
+   *
+   * ⚠️ **The union closes a §1 silent-omission gap.** A freshly-started LIVE session has little
+   * cache-read, so a pure heaviest-N list would drop the very sessions the renderer wants to mark
+   * "live" — they would never reach the payload. Adding the most-recent-N (by `MAX(ts)` =
+   * `lastActivityTs`) guarantees a recently-active session is always present, whatever its weight.
+   *
+   * ⚠️ **"now" is NOT in the SQL.** The query stays deterministic: it returns each session's
+   * `lastActivityTs`, and the RENDERER classifies live/recent against its own clock (`isLive` /
+   * `isRecent`). The "recent" set here is by raw recency (`ORDER BY last_activity_ts DESC`), not by
+   * a wall-clock window — so a re-run at a different instant returns the same rows.
    *
    * ⚠️ Population is M-01 (`is_synthetic = 0`): `tok_cache_read` is M-04's cache-read class and
-   * `tok_output` is M-02, so this leaderboard's per-session numbers sum to the same two totals the
-   * panel's headline shows. Both origins roll up (§2.1, ADR-020) — a subagent's cache reads are the
-   * parent session's — because nothing here filters `origin`.
-   *
-   * ⚠️ `label` is the project UNIT display name (ADR-040): the group's name when the user grouped
-   * this folder, else §3.3's folder-derived display name. Never the numeric unit id and never the
-   * encoded path (§1a). `startedAt` is `MIN(ts)` over the session's in-scope events (ADR-021 —
-   * stored UTC epoch ms; the renderer buckets to a local date), so a date filter narrows the start
-   * to the window the user is looking at rather than an event they filtered out.
-   *
-   * Ordered cache-read DESC, ties broken by session id for a stable page, then capped — a
-   * query-time aggregate, never stored (ADR-027).
+   * `tok_output` is M-02, so the per-session numbers sum to the same two totals the panel's headline
+   * shows. Both origins roll up (§2.1, ADR-020). `label` is the project UNIT display name (ADR-040),
+   * never the numeric unit id or the encoded path (§1a). `startedAt` is `MIN(ts)` over the session's
+   * in-scope events (ADR-021). All query-time only, never stored (ADR-027).
    */
-  heaviestByCacheRead(context: QueryContext, limit: number): ContextOverhead['sessions'] {
+  heaviestAndRecentSessions(context: QueryContext, limit: number): ContextOverhead['sessions'] {
     const scope = scopeClause(context.filter, 'e');
-    return this.all<{
+    const rows = this.all<{
       readonly key: string;
       readonly label: string;
       readonly started_at: number;
+      readonly last_activity_ts: number;
+      readonly subagent_turns: number;
       readonly cache_read_tokens: number | bigint | null;
       readonly output_tokens: number | bigint | null;
     }>(
       `WITH ${PROJECT_UNIT_CTE},
        scoped AS (
-         SELECT e.session_id AS session_id, e.ts AS ts,
+         SELECT e.session_id AS session_id, e.ts AS ts, e.role AS role, e.origin AS origin,
                 e.tok_output AS tok_output, e.tok_cache_read AS tok_cache_read
          FROM   events e
          WHERE  e.is_synthetic = 0${scope.sql}
@@ -556,32 +561,119 @@ export class SessionStatsRepository extends Repository {
        per_session AS (
          SELECT session_id,
                 MIN(ts)                             AS started_at,
+                -- A-12 — the session's last recorded activity, both origins. The renderer alone
+                -- compares it to the wall clock for the presentational "live"/"recent" signal
+                -- (written nowhere, fed to no metric, §1).
+                MAX(ts)                             AS last_activity_ts,
                 COALESCE(SUM(tok_output), 0)        AS output_tokens,
-                COALESCE(SUM(tok_cache_read), 0)    AS cache_read_tokens
+                COALESCE(SUM(tok_cache_read), 0)    AS cache_read_tokens,
+                -- A-12 — assistant turns a subagent ran, EXCLUDED from the main-context trajectory
+                -- below but disclosed honestly (§4.6). A subagent runs a separate context (ADR-020).
+                COALESCE(SUM(CASE WHEN origin = 'subagent' AND role = 'assistant'
+                                  THEN 1 ELSE 0 END), 0)              AS subagent_turns
          FROM   scoped
          GROUP BY session_id
+       ),
+       -- A-12 — the two capped sets, then their UNION. No "now" appears anywhere: "recent" is the
+       -- most recently active by MAX(ts), a deterministic ordering, NOT a wall-clock window.
+       heaviest AS (
+         SELECT session_id FROM per_session ORDER BY cache_read_tokens DESC, session_id ASC LIMIT ?
+       ),
+       recent AS (
+         SELECT session_id FROM per_session ORDER BY last_activity_ts DESC, session_id ASC LIMIT ?
+       ),
+       chosen AS (
+         SELECT session_id FROM heaviest UNION SELECT session_id FROM recent
        )
        SELECT ps.session_id      AS key,
               -- ADR-040 — the project UNIT's display name (a group's name, or §3.3's folder name);
               -- never the numeric unit id or the encoded path (§1a).
               u.unit_name        AS label,
               ps.started_at      AS started_at,
+              ps.last_activity_ts AS last_activity_ts,
+              ps.subagent_turns  AS subagent_turns,
               ps.cache_read_tokens AS cache_read_tokens,
               ps.output_tokens   AS output_tokens
        FROM   per_session ps
+       JOIN   chosen c        ON c.session_id = ps.session_id
        JOIN   sessions s      ON s.id = ps.session_id
        JOIN   project_unit u  ON u.project_id = s.project_id
-       ORDER BY ps.cache_read_tokens DESC, ps.session_id ASC
-       LIMIT  ?`,
+       ORDER BY ps.cache_read_tokens DESC, ps.session_id ASC`,
       ...scope.params,
       limit,
-    ).map((row) => ({
+      limit,
+    );
+
+    // A-12 — the per-turn series for exactly the leaderboard sessions, one bounded second query
+    // (the leaderboard is already capped at `limit`). Ordered by session then `ts` then `id`, so
+    // each session's turns arrive in the exact order the conversation happened (a stable `id`
+    // tiebreak keeps two same-millisecond turns deterministic).
+    const turnsBySession = this.#trajectoryTurns(
+      context,
+      rows.map((row) => row.key),
+    );
+
+    return rows.map((row) => ({
       key: row.key,
       label: row.label,
       startedAt: row.started_at,
+      lastActivityTs: row.last_activity_ts,
       cacheReadTokens: sumToSafeNumber(row.cache_read_tokens, 'tokens.cacheRead'),
       outputTokens: sumToSafeNumber(row.output_tokens, 'tokens.output'),
+      subagentTurns: row.subagent_turns,
+      turns: turnsBySession.get(row.key) ?? [],
     }));
+  }
+
+  /**
+   * A-12 — one main-conversation assistant turn per row, in conversation order, for the given
+   * sessions. `context` is the tokens fed that turn
+   * (`tok_input + tok_cache_read + tok_cache_write + tok_cache_write_1h`); `output` is `tok_output`.
+   *
+   * ⚠️ **Main only** (`origin = 'main'`): a subagent runs a separate context (ADR-020), so mixing
+   * its turns into this stream would show a context that resets for a reason the user did not cause.
+   * ⚠️ **No ratio, no baseline, no verdict here** — every one of those is derived in the renderer
+   * from these raw pairs (ADR-027; A-11's "compute the ratio at the edge"). A `context = 0` turn is
+   * returned as-is; the renderer skips it from the ratio rather than dividing (§1).
+   */
+  #trajectoryTurns(
+    context: QueryContext,
+    sessionIds: readonly string[],
+  ): Map<string, { context: number; output: number }[]> {
+    const bySession = new Map<string, { context: number; output: number }[]>();
+    if (sessionIds.length === 0) return bySession;
+
+    const scope = scopeClause(context.filter, 'e');
+    const placeholders = sessionIds.map(() => '?').join(', ');
+    const turns = this.all<{
+      readonly session_id: string;
+      readonly context: number | bigint | null;
+      readonly output: number | bigint | null;
+    }>(
+      `SELECT e.session_id AS session_id,
+              COALESCE(e.tok_input, 0) + COALESCE(e.tok_cache_read, 0)
+                + COALESCE(e.tok_cache_write, 0) + COALESCE(e.tok_cache_write_1h, 0) AS context,
+              COALESCE(e.tok_output, 0) AS output
+       FROM   events e
+       WHERE  e.is_synthetic = 0 AND e.origin = 'main' AND e.role = 'assistant'
+              AND e.session_id IN (${placeholders})${scope.sql}
+       ORDER BY e.session_id, e.ts, e.id`,
+      ...sessionIds,
+      ...scope.params,
+    );
+
+    for (const turn of turns) {
+      let list = bySession.get(turn.session_id);
+      if (list === undefined) {
+        list = [];
+        bySession.set(turn.session_id, list);
+      }
+      list.push({
+        context: sumToSafeNumber(turn.context, 'trajectory.context'),
+        output: sumToSafeNumber(turn.output, 'trajectory.output'),
+      });
+    }
+    return bySession;
   }
 
   #sessionCount(context: QueryContext): number {

@@ -91,6 +91,7 @@ export const DEFAULT_SETTINGS: SettingsSnapshot = {
   sidebarCollapsed: false,
   reduceMotionOverride: 'system',
   retainOrphanedHistory: true,
+  efficiencyDropThreshold: 0.4, // A-12
 };
 
 export const IDLE_SYNC: SyncState = {

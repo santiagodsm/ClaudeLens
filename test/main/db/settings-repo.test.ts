@@ -41,6 +41,7 @@ describe('SettingsRepository (§3.13)', () => {
     expect([...SETTING_KEYS].toSorted()).toEqual([
       'archiveRoot',
       'claudeDir',
+      'efficiencyDropThreshold',
       'idleGapMinutes',
       'lastGlobalFilter',
       'priceFetchUrl',
@@ -61,6 +62,7 @@ describe('SettingsRepository (§3.13)', () => {
       sidebarCollapsed: false,
       reduceMotionOverride: 'system',
       retainOrphanedHistory: true, // ADR-041 — keep history by default (never auto-deletes)
+      efficiencyDropThreshold: 0.4, // A-12 — flag below 40% of the session's starting efficiency
     });
     // Defaults come from the table, not from the read path inventing them.
     expect(countRows(dbs.openMigrated(), 'settings')).toBe(0);
@@ -78,7 +80,8 @@ describe('SettingsRepository (§3.13)', () => {
     repo.set('lastGlobalFilter', { projectIds: [1, 2], from: T0, to: T0 + 1000 }, T0);
     repo.set('sidebarCollapsed', true, T0);
     repo.set('reduceMotionOverride', 'reduce', T0);
-    const snapshot = repo.set('retainOrphanedHistory', false, T0);
+    repo.set('retainOrphanedHistory', false, T0);
+    const snapshot = repo.set('efficiencyDropThreshold', 0.6, T0);
 
     expect(snapshot).toEqual({
       claudeDir: '/sandbox/data/.claude',
@@ -90,6 +93,7 @@ describe('SettingsRepository (§3.13)', () => {
       sidebarCollapsed: true,
       reduceMotionOverride: 'reduce',
       retainOrphanedHistory: false, // ADR-041 — flips off the keep-history default
+      efficiencyDropThreshold: 0.6, // A-12 — round-trips as a fraction
     });
     expect(repo.get('idleGapMinutes')).toBe(30);
   });
@@ -131,6 +135,29 @@ describe('SettingsRepository (§3.13)', () => {
     const repo = new SettingsRepository(dbs.openMigrated());
     expect(repo.set('idleGapMinutes', 5, T0).idleGapMinutes).toBe(5);
     expect(repo.set('idleGapMinutes', 60, T0).idleGapMinutes).toBe(60);
+  });
+
+  it('A-12 — efficiencyDropThreshold: default, round-trip, boundaries, and rejection', () => {
+    const repo = new SettingsRepository(dbs.openMigrated());
+
+    // Default is the user-confirmed 0.40 (A-12).
+    expect(repo.snapshot().efficiencyDropThreshold).toBe(0.4);
+
+    // In-range fractions round-trip exactly — never rounded, never clamped (§1).
+    expect(repo.set('efficiencyDropThreshold', 0.55, T0).efficiencyDropThreshold).toBe(0.55);
+    expect(repo.set('efficiencyDropThreshold', 0.05, T0).efficiencyDropThreshold).toBe(0.05);
+    expect(repo.set('efficiencyDropThreshold', 0.95, T0).efficiencyDropThreshold).toBe(0.95);
+
+    // ⚠️ Out of range is REJECTED, not clamped — the persisted default stands and nothing is
+    // written that quietly disagrees with what the user asked for (§1: never substitute). The
+    // discriminator: a clamp would have returned 0.05/0.95 here, not raised.
+    expect(codeOf(() => repo.set('efficiencyDropThreshold', 0, T0))).toBe('E_INVALID_SETTING');
+    expect(codeOf(() => repo.set('efficiencyDropThreshold', 1, T0))).toBe('E_INVALID_SETTING');
+    expect(codeOf(() => repo.set('efficiencyDropThreshold', 0.04, T0))).toBe('E_INVALID_SETTING');
+    expect(codeOf(() => repo.set('efficiencyDropThreshold', Number.NaN, T0))).toBe(
+      'E_INVALID_SETTING',
+    );
+    expect(codeOf(() => repo.set('efficiencyDropThreshold', '0.4', T0))).toBe('E_INVALID_SETTING');
   });
 
   it('ignores an unknown key already present in the table (§3.13, read side)', () => {

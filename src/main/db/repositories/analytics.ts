@@ -205,7 +205,7 @@ export class AnalyticsRepository {
     return {
       cacheReadTokens: tokens.cacheRead,
       outputTokens: tokens.output,
-      sessions: this.#sessions.heaviestByCacheRead(context, CONTEXT_OVERHEAD_LIMIT),
+      sessions: this.#sessions.heaviestAndRecentSessions(context, CONTEXT_OVERHEAD_LIMIT),
     };
   }
 

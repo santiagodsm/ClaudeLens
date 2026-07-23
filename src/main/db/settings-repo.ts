@@ -86,6 +86,18 @@ const asIdleGapMinutes = (value: unknown): number | undefined => {
   return value;
 };
 
+/**
+ * A-12 — the session-efficiency flag threshold, a fraction in [0.05, 0.95]. Like `idleGapMinutes`
+ * it is REJECTED, never clamped and never rounded, when out of range (CLAUDE.md §1: never
+ * substitute). No step is enforced: unlike the minute slider a percentage has no natural integer
+ * grid, and the panel's slider only ever emits in-range values.
+ */
+const asEfficiencyDropThreshold = (value: unknown): number | undefined => {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+  if (value < 0.05 || value > 0.95) return undefined;
+  return value;
+};
+
 const asNullableEpochMs = (value: unknown): number | null | undefined => {
   if (value === null) return null;
   return typeof value === 'number' && Number.isSafeInteger(value) ? value : undefined;
@@ -145,6 +157,11 @@ export const SETTING_DEFINITIONS: {
   // value-consistent choice, not a surprise. It is a setting so a user who wants a pure mirror
   // of `<claudeDir>` can turn it OFF (§3.13, §5.3).
   retainOrphanedHistory: { defaultValue: true, parse: asBoolean },
+  // A-12 — the session-efficiency flag threshold. Default 0.40 ("flag when efficiency drops below
+  // 40% of how the session started"). Purely presentational; no metric reads it. Added here, with
+  // no DB migration, exactly as ADR-041's `retainOrphanedHistory` was: `settings` is a key/value
+  // table (§3.13), so a new key needs a definition, not a schema change.
+  efficiencyDropThreshold: { defaultValue: 0.4, parse: asEfficiencyDropThreshold },
 };
 
 export const SETTING_KEYS: readonly SettingKey[] = Object.keys(SETTING_DEFINITIONS) as SettingKey[];

@@ -44,6 +44,13 @@ import { localDayString } from './shared/disclosures';
 // ---------------------------------------------------------------------------
 
 export const IDLE_GAP_NOTE = 'Gaps longer than this are removed from active time.';
+/** A-12 — the session-efficiency flag threshold, explained in plain words (§1a). Stated as "% lost"
+ *  so it matches the Tokens & Cost panel's slider and graph, which use the same framing. */
+export const EFFICIENCY_THRESHOLD_NOTE =
+  'A session is flagged on the Tokens & Cost screen as worth clearing or compacting once it has lost more than this share of the efficiency it had when it started.';
+/** ⚠️ Never let this read as a quality score — it is a self-referential efficiency proxy (A-12). */
+export const EFFICIENCY_THRESHOLD_QUALITY_NOTE =
+  'This compares tokens written to tokens of context — never the quality of the answers.';
 /** ⚠️ The sentence that stops the slider being read as a session-boundary control (INV-05). */
 export const IDLE_GAP_BOUNDARY_NOTE = 'This does not change session boundaries.';
 export const REBUILD_WARNING =
@@ -81,6 +88,11 @@ const IDLE_GAP_MIN = 5;
 const IDLE_GAP_MAX = 60;
 const IDLE_GAP_STEP = 5;
 
+/** A-12 — the flag threshold slider, in whole percent (the stored value is the fraction). */
+const EFFICIENCY_MIN_PERCENT = 5;
+const EFFICIENCY_MAX_PERCENT = 95;
+const EFFICIENCY_STEP_PERCENT = 5;
+
 /**
  * §6.10 error row — "Inline under the field that failed, using the specific `ErrorCode`
  * message". The renderer branches on `code`, never on `message` (§4.1 rule 2).
@@ -111,6 +123,7 @@ export function SettingsView(): JSX.Element {
       >
         <DirectoryCard />
         <IdleGapCard />
+        <EfficiencyThresholdCard />
         <ThemeCard />
         <ResyncCard />
         <PricingCard />
@@ -342,6 +355,66 @@ function IdleGapCard(): JSX.Element {
       <p className="text-small text-text-muted">{IDLE_GAP_NOTE}</p>
       {/* ⚠️ INV-05 — changing this changes active time and nothing else. */}
       <p className="text-small text-text-primary">{IDLE_GAP_BOUNDARY_NOTE}</p>
+      {error !== null && <p className="text-small text-danger">{error.message}</p>}
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 2b — Session-efficiency flag threshold (A-12)
+// ---------------------------------------------------------------------------
+
+/**
+ * A-12 — mirrors the panel's slider so the two always agree, and persists the value so it sticks
+ * across launches (the same USER-class round trip as every other setting).
+ *
+ * ⚠️ The STORED value is unchanged — a retained-efficiency fraction (`efficiencyDropThreshold`,
+ * default 0.40). The control shows and edits it as "% lost" (its complement) to match the panel's
+ * graph and slider: display = 100 − round(fraction×100) (60 by default), and a change of L% persists
+ * a fraction of (100 − L)/100. Slider range 5–95 (% lost) ↔ stored 0.95–0.05, inside [0.05, 0.95].
+ */
+function EfficiencyThresholdCard(): JSX.Element {
+  const stored = useAppStore((state) => state.settings?.efficiencyDropThreshold ?? null);
+  const [value, setValue] = useState<number | null>(null);
+  const [error, setError] = useState<AppError | null>(null);
+
+  const currentFraction = value ?? stored;
+  const currentLostPercent =
+    currentFraction === null ? null : 100 - Math.round(currentFraction * 100);
+
+  return (
+    <Card id="efficiency-threshold" title="Flag sessions worth restarting">
+      <label className="flex items-center gap-4 text-small text-text-primary">
+        <input
+          type="range"
+          data-testid="efficiency-threshold-slider"
+          aria-label="Flag a session once it has lost more than this share of its starting efficiency"
+          min={EFFICIENCY_MIN_PERCENT}
+          max={EFFICIENCY_MAX_PERCENT}
+          step={EFFICIENCY_STEP_PERCENT}
+          disabled={currentLostPercent === null}
+          value={currentLostPercent ?? EFFICIENCY_MIN_PERCENT}
+          onChange={(event) => {
+            // Slider is "% lost"; the STORED value stays the retained fraction (100 − lost) / 100.
+            setValue((100 - Number.parseInt(event.target.value, 10)) / 100);
+          }}
+          onPointerUp={() => {
+            if (value === null) return;
+            void applySetting('efficiencyDropThreshold', value).then(setError);
+          }}
+          onKeyUp={() => {
+            if (value === null) return;
+            void applySetting('efficiencyDropThreshold', value).then(setError);
+          }}
+          className="w-full"
+        />
+        <span data-testid="efficiency-threshold-value" className="w-24 shrink-0 text-right">
+          {currentLostPercent === null ? '—' : `${String(currentLostPercent)}% lost`}
+        </span>
+      </label>
+      <p className="text-small text-text-muted">{EFFICIENCY_THRESHOLD_NOTE}</p>
+      {/* ⚠️ A-12 — never let it read as a quality score. */}
+      <p className="text-small text-text-primary">{EFFICIENCY_THRESHOLD_QUALITY_NOTE}</p>
       {error !== null && <p className="text-small text-danger">{error.message}</p>}
     </Card>
   );

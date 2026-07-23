@@ -111,6 +111,9 @@ export function cacheEfficiency(overrides: Partial<CacheEfficiency> = {}): Cache
 export function contextOverhead(overrides: Partial<ContextOverhead> = {}): ContextOverhead {
   // A-11 — two heaviest sessions, cache-read DESC, each labelled by a project NAME (never an id).
   // The ratio is derived in the renderer from these totals; the payload carries no quotient.
+  // A-12 — each session also carries its raw per-turn series, its last activity and the count of
+  // excluded subagent turns. `lastActivityTs` is old (= startedAt) so `isLive` is false by default,
+  // keeping these payloads clock-independent; a test that wants "live" injects `now`.
   return {
     cacheReadTokens: 900_000,
     outputTokens: 30_000,
@@ -119,15 +122,33 @@ export function contextOverhead(overrides: Partial<ContextOverhead> = {}): Conte
         key: 'sess-0000-1111',
         label: 'demo-alpha',
         startedAt: T0,
+        lastActivityTs: T0,
         cacheReadTokens: 600_000,
         outputTokens: 18_000,
+        subagentTurns: 0,
+        // Six eligible turns of declining efficiency → a judgeable, clearly declining session.
+        turns: [
+          { context: 1_000, output: 500 }, // eff 0.5
+          { context: 2_000, output: 500 }, // eff 0.25
+          { context: 4_000, output: 500 }, // eff 0.125
+          { context: 8_000, output: 400 }, // eff 0.05
+          { context: 16_000, output: 320 }, // eff 0.02
+          { context: 32_000, output: 320 }, // eff 0.01
+        ],
       },
       {
         key: 'sess-2222-3333',
         label: 'demo-beta',
         startedAt: T0 + 24 * HOUR,
+        lastActivityTs: T0 + 24 * HOUR,
         cacheReadTokens: 300_000,
         outputTokens: 12_000,
+        subagentTurns: 0,
+        // Only two turns → too short to judge (grey), never a fabricated colour.
+        turns: [
+          { context: 1_000, output: 500 },
+          { context: 1_500, output: 400 },
+        ],
       },
     ],
     ...overrides,

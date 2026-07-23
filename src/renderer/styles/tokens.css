@@ -246,6 +246,34 @@
   --slide-view: 0px;
 }
 
+/*
+ * A-12 (PROGRESS.md) — the "live now" indicator dot pulses, so a currently-running session is
+ * unmistakable. The dot's colour is set inline as var(--ok) by the component; this rule owns only
+ * the motion. ⚠️ P-31 / FRONTEND §7 — it MUST degrade to a solid dot when motion is reduced, by the
+ * OS setting (unless the user overrode to 'full') or by the reduceMotionOverride 'reduce' setting.
+ * `animation: none` leaves the dot at full opacity — i.e. a plain solid dot.
+ */
+@keyframes lens-dot-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+.dot-pulse {
+  animation: lens-dot-pulse 1.6s var(--ease-out) infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-motion='full']) .dot-pulse {
+    animation: none;
+  }
+}
+:root[data-motion='reduce'] .dot-pulse {
+  animation: none;
+}
+
 /* Surfaced to Tailwind. `inline` because every value is a reference to a custom property
    declared above, which is what makes the theme switch at runtime (STACK ADR-004). */
 @theme inline {

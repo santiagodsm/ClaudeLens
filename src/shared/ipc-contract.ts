@@ -170,6 +170,16 @@ export interface SettingsSnapshot {
   // deleting derived history because a file vanished is the same violation. FALSE restores the
   // pure-mirror delete-and-cascade behaviour (§3.13).
   retainOrphanedHistory: boolean; // default true (ADR-041)
+  /**
+   * ⚠️ A-12 (PROGRESS.md, 2026-07-23) — the session-efficiency flag threshold. A session's turn is
+   * flagged (shown red) once its output-per-context "efficiency" has decayed to below this fraction
+   * of how the session started. Default 0.40 ("flag when efficiency drops below 40% of baseline");
+   * range [0.05, 0.95], REJECTED not clamped out of range (mirrors `idleGapMinutes`, §1). Purely
+   * presentational: it recolors the trajectory in the renderer and touches no metric or stored
+   * value. Persisted like every other key so the slider on the panel and the Settings control agree
+   * across launches. No DB migration — `settings` is a key/value table (§3.13), as ADR-041 was.
+   */
+  efficiencyDropThreshold: number; // default 0.40 (A-12)
 }
 
 /** §3.13 */
@@ -590,17 +600,36 @@ export interface ContextOverhead {
   /** M-02 output-token sum over the same population. `0` is a real measured total, not "unknown". */
   outputTokens: number;
   /**
-   * The heaviest sessions by cache-read tokens, most first. `key` is a stable session id for React
-   * identity ONLY and is never shown; `label` is the session's project (or group) display NAME,
-   * never a numeric id or an encoded path (§1a). `startedAt` is UTC epoch ms (ADR-021 — the
+   * The sessions the panel needs: the **heaviest by cache-read tokens ∪ the most-recently-active**
+   * (by `lastActivityTs`), deduped, ordered cache-read DESC (A-12). ⚠️ The union is deliberate: a
+   * freshly-started live session has little cache-read, so a pure heaviest list would silently drop
+   * the very sessions the renderer marks "live"/"recent" (§1). `key` is a stable session id for
+   * React identity ONLY and is never shown; `label` is the session's project (or group) display
+   * NAME, never a numeric id or an encoded path (§1a). `startedAt` is UTC epoch ms (ADR-021 — the
    * renderer buckets it to a local date).
+   *
+   * ⚠️ **A-12 (2026-07-23) — the per-turn trajectory carried raw.** `turns` is one entry per
+   * main-conversation assistant turn (`is_synthetic = 0`, `origin = 'main'`, `role = 'assistant'`),
+   * in `ts` order: `context` is the tokens fed that turn
+   * (`tok_input + tok_cache_read + tok_cache_write + COALESCE(tok_cache_write_1h, 0)`) and `output`
+   * is `tok_output`. The efficiency ratio, its baseline, the decay and the red/amber/green verdict
+   * are ALL derived in the renderer from these raw pairs (never on the wire, never stored, never
+   * rounded in SQL — ADR-027, and A-11's "USD only at the edge" reasoning). A `context = 0` turn is
+   * a real measured point carried as-is; the renderer skips it from the ratio rather than dividing.
+   * `subagentTurns` is the count of assistant turns EXCLUDED because a subagent runs a separate
+   * context (surfaced honestly, §4.6). `lastActivityTs` is the session's last recorded activity
+   * (`MAX(ts)`, both origins) — the renderer alone compares it to the wall clock for the "live"
+   * signal, which is presentational and written nowhere (A-12).
    */
   sessions: {
     key: string;
     label: string;
     startedAt: number;
+    lastActivityTs: number;
     cacheReadTokens: number;
     outputTokens: number;
+    subagentTurns: number;
+    turns: { context: number; output: number }[];
   }[];
 }
 

@@ -23,8 +23,10 @@ import { useQuery } from '../hooks/use-query';
 import { formatCompact, formatCost } from '../lib/format';
 import { useAppStore } from '../store/app-store';
 import { ViewShell } from '../shell/ViewShell';
+import { invoke } from '../lib/ipc';
 import { ContextOverhead } from './charts/ContextOverhead';
 import { ModelAreaChart } from './charts/ModelAreaChart';
+import { SessionTrajectory } from './charts/SessionTrajectory';
 import { OriginDonut, unlinkedRunsFootnote } from './charts/OriginDonut';
 import { ProjectTreemap } from './charts/ProjectTreemap';
 import { ProjectDetailDrawer } from './shared/ProjectDetailDrawer';
@@ -94,6 +96,25 @@ export function TokensView(): JSX.Element {
   // The unit id of the project whose detail drawer is open; `null` = closed. Opened by a treemap
   // tile (below) — the same drawer a Projects & Code card opens (§6.4/§6.8, one destination).
   const [openProject, setOpenProject] = useState<number | null>(null);
+
+  // A-12 — the session-efficiency flag threshold. ⚠️ **The persisted value is the single source of
+  // truth**, so a change made from the Settings view is always reflected here. A local override
+  // lets a drag re-colour the trajectory in the same frame (the theme toggle's presentational
+  // discipline), but it is REMEMBERED WITH the stored value it was based on: the moment the store's
+  // value changes — whether from this write landing or from the Settings control — `base` no longer
+  // matches and the override is ignored, so the two controls can never silently disagree.
+  const storedThreshold = useAppStore((state) => state.settings?.efficiencyDropThreshold ?? 0.4);
+  const [override, setOverride] = useState<{ base: number; value: number } | null>(null);
+  const efficiencyThreshold =
+    override !== null && override.base === storedThreshold ? override.value : storedThreshold;
+  const changeThreshold = (value: number): void => {
+    setOverride({ base: storedThreshold, value });
+    // Fire-and-forget so the UI never waits on the write; the returned snapshot updates the store,
+    // after which `storedThreshold` itself carries the new value and the override falls away.
+    void invoke('settings:set', { key: 'efficiencyDropThreshold', value }).then((result) => {
+      if (result.ok) useAppStore.setState({ settings: result.data });
+    });
+  };
 
   const timeline = useQuery('q:tokensByModel', { ...filter, mode, bucket });
   const overhead = useQuery('q:contextOverhead', filter);
@@ -165,6 +186,12 @@ export function TokensView(): JSX.Element {
           <p className="text-small text-text-muted">{CACHE_READ_NOTE}</p>
         </div>
       }
+      // ⚠️ Card order set by user request 2026-07-23: top-to-bottom (1) Output tokens by model,
+      // (2) Session efficiency over time, (3) Output tokens by project, (4) Context overhead, then
+      // the paired bottom row (5) Cost + (6) Main loop vs subagents (8/4 split). Cards 1–4 are
+      // full-width. Rendered order is `children` then `secondary` (see ViewShell), so cards 1–2 sit
+      // in `children` and 3–6 in `secondary` — no card's data, controls, disclosures, titles or
+      // test ids changed; only spans and the entrance `index` (0..5, top-to-bottom).
       secondary={
         <>
           <ChartCard
@@ -189,11 +216,26 @@ export function TokensView(): JSX.Element {
             ) : undefined}
           </ChartCard>
 
+          {/* A-11 — the actionable panel that replaced the cache-efficiency gauge (user directive
+              2026-07-22): the gauge sat at ~99.9% for everyone and was not actionable. */}
+          <ChartCard
+            title="Context overhead"
+            subtitle="How much conversation you re-read from cache per token written — and which sessions carry it"
+            className="col-span-12"
+            index={3}
+            loading={overhead.loading && overhead.data === null}
+            error={overhead.error}
+            onRetry={overhead.refetch}
+            data-testid="tokens-context-overhead"
+          >
+            {overhead.data !== null ? <ContextOverhead data={overhead.data} /> : undefined}
+          </ChartCard>
+
           <ChartCard
             title="Cost"
             subtitle="Each dollar figure is what those tokens would cost at list price. The columns count the tokens behind it."
             className="col-span-12 xl:col-span-8"
-            index={3}
+            index={4}
             footer={
               // ⚠️ Plain-words gloss so no column is a number without a meaning (§1a, user
               // directive — "cost by project has numbers I don't know the meaning of").
@@ -301,7 +343,7 @@ export function TokensView(): JSX.Element {
             title="Main loop vs subagents"
             subtitle="Share of output tokens written by the main loop versus its subagents"
             className="col-span-12 xl:col-span-4"
-            index={4}
+            index={5}
             loading={origin.loading && origin.data === null}
             error={origin.error}
             onRetry={origin.refetch}
@@ -321,7 +363,7 @@ export function TokensView(): JSX.Element {
         <ChartCard
           title={timelineTitle}
           subtitle={`Stacked per model, by ${bucket === 'day' ? 'day' : 'week'}`}
-          className="col-span-12 xl:col-span-8"
+          className="col-span-12"
           index={0}
           loading={timeline.loading && timeline.data === null}
           error={timeline.error}
@@ -387,19 +429,27 @@ export function TokensView(): JSX.Element {
           ) : undefined}
         </ChartCard>
 
-        {/* A-11 — the actionable panel that replaced the cache-efficiency gauge (user directive
-            2026-07-22): the gauge sat at ~99.9% for everyone and was not actionable. */}
+        {/* A-12 — the trajectory explorer: watch context pile up while output stays flat, and see
+            when a session is worth clearing or compacting. The threshold slider re-colours it in
+            the renderer; nothing is re-queried or stored. Hosted here (not a new nav item) because
+            §6.2 locks the eight nav items. */}
         <ChartCard
-          title="Context overhead"
-          subtitle="How much conversation you re-read from cache per token written — and which sessions carry it"
-          className="col-span-12 xl:col-span-4"
+          title="Session efficiency over time"
+          subtitle="Watch a session's context grow while its writing stays flat — and see when it is worth a fresh start"
+          className="col-span-12"
           index={1}
           loading={overhead.loading && overhead.data === null}
           error={overhead.error}
           onRetry={overhead.refetch}
-          data-testid="tokens-context-overhead"
+          data-testid="tokens-session-trajectory"
         >
-          {overhead.data !== null ? <ContextOverhead data={overhead.data} /> : undefined}
+          {overhead.data !== null ? (
+            <SessionTrajectory
+              data={overhead.data}
+              threshold={efficiencyThreshold}
+              onThresholdChange={changeThreshold}
+            />
+          ) : undefined}
         </ChartCard>
       </div>
 
