@@ -558,10 +558,14 @@ export class GraphStatsRepository extends Repository {
       readonly value: number | bigint;
     }>(
       // ADR-040 — the first stage's node is the project **unit**, so a grouped project is one
-      // band in the Sankey rather than two. The node key stays a name, as it was; for a group it
-      // is the user's own name for it.
+      // band in the Sankey rather than two. ⚠️ The node label is the unit's DISPLAY name
+      // (`unit_name` = group name, or the project's folder basename per §3.3) — never
+      // `unit_encoded_name`, which is the raw `projects/<encoded-path>` key and embeds the
+      // user's absolute home path and username (§7.8 / P-33). Two ungrouped projects that share a
+      // display name merge into one band here, which is acceptable and consistent with §3.3
+      // treating the display name as cosmetic; leaking the path is not.
       `WITH ${PROJECT_UNIT_CTE}
-       SELECT 'project:' || COALESCE(u.unit_encoded_name, u.unit_name) AS source,
+       SELECT 'project:' || u.unit_name AS source,
               'model:' || e.model AS target,
               COALESCE(SUM(e.tok_output), 0) AS value
        FROM   events e
