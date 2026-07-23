@@ -18,7 +18,7 @@ dollar cost, sessions and time, tools and agents, projects and code. On top of t
 Manager** with a **Bloat Radar** that can delete and clean — always behind a confirm dialog, an
 automatic backup, an undo, and an audit trail. It is designed to be **left open all day** on a
 second monitor, live-watching the Claude data directory and updating as the user works. It ships as
-source and runs via `npm run dev`.
+source and runs via `pnpm run dev`.
 
 ## Who
 
@@ -223,7 +223,7 @@ interview; provenance noted so it stays honest:
 5. **Not a team or multi-machine tool.** One directory, one machine, one person. No merging of
    several people's data, no comparison against anyone else, no accounts. *(HANDOFF §2.)*
 6. **No packaged distribution.** No code signing, no notarization, no `.dmg`, no auto-update, no
-   store. Source only: `npm install && npm run dev`. *(DESIGN_INPUT §11.)*
+   store. Source only: `pnpm install && pnpm run dev`. *(DESIGN_INPUT §11.)*
 7. **Not a monitor.** No alerting, no threshold notifications, no menu-bar widget, and **no
    background process when the window is closed.** The app is live only while open. *(Implied by
    DESIGN_INPUT §3.3, which scopes watching to "while open.")*
@@ -345,7 +345,7 @@ marked ✅ were live schema forks and are now **decided** — do not reopen them
 - **Timeline:** **open-ended.** Personal project, no deadline, explicitly multi-session. No
   scope/timeline contradiction to flag.
 - **Platform:** macOS desktop. Electron + electron-vite. **No packaging toolchain at all** — no
-  signing, no notarization, no `.dmg`. Source distribution only: `npm install && npm run dev`.
+  signing, no notarization, no `.dmg`. Source distribution only: `pnpm install && pnpm run dev`.
   *(`STACK.md` removed `electron-builder` outright rather than leaving it installed-but-unused: an
   installed packaging tool is a lockfile entry, an audit surface, and an invitation for a later
   agent to "finish" it.)*

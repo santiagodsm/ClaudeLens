@@ -80,6 +80,6 @@ test('⚠️ the window logs no console error during a normal launch', async () 
   await completeOnboarding(launched);
   // ADR-018's clause, applied to the launch path itself. A preload boundary violation, a
   // missing IPC handler or a `node:` import jsdom tolerated all surface here and nowhere in
-  // `npm run check`.
+  // `pnpm run check`.
   expect(launched.consoleErrors).toEqual([]);
 });

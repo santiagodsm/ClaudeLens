@@ -4,7 +4,7 @@ dist
 coverage
 test-results
 playwright-report
-package-lock.json
+pnpm-lock.yaml
 
 # Markdown is hand-authored contract text (PRD/STACK/DESIGN/PLAN/PROGRESS/CLAUDE).
 # Its tables are aligned by hand and reflowing them produces enormous, meaningless

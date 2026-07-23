@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-// Runs immediately after `electron-vite build`, inside `npm run build`.
+// Runs immediately after `electron-vite build`, inside `pnpm run build`.
 //
 // STACK ADR-010, and this is the whole reason it exists: esbuild does not typecheck and
 // rollup does not warn, so an externalization mistake ships a build that PASSES and then
 // throws at runtime. chokidar 5 is ESM-only; electron-vite's `externalizeDepsPlugin` is on
 // by default in the scaffolded template, and an externalized ESM-only package `require()`d
-// from a CJS main bundle fails the moment the watcher starts — long after `npm run check`
+// from a CJS main bundle fails the moment the watcher starts — long after `pnpm run check`
 // went green.
 //
 // The assertion is stated over the EMITTED BUNDLE rather than over the config, because the
@@ -21,7 +21,7 @@
 // `require("better-sqlite3")` in the BUNDLE — the one shape ADR-006 exists to prevent.
 // `src/main/db/driver.ts` resolves the module id at RUNTIME
 // (`process.versions.electron ? 'better-sqlite3-electron' : 'better-sqlite3'`) through
-// `createRequire`, which is precisely why `npm run check` can be green under Node's ABI
+// `createRequire`, which is precisely why `pnpm run check` can be green under Node's ABI
 // while the app runs under Electron's. Rollup therefore never emits — and never can emit —
 // a static require for it, so the old assertion was red on a correct tree.
 //
@@ -81,7 +81,7 @@ function externalsOf(source) {
     // property access spelled `x["from"]` in ordinary bundled code, capturing everything up to
     // the next quote as a "package name". It was latent until `src/main/index.ts` began
     // importing `src/main/db/settings-repo.ts`, whose §4.2 `GlobalFilter` validator reads
-    // `candidate['from']` — at which point `npm run build` failed with a garbage specifier and
+    // `candidate['from']` — at which point `pnpm run build` failed with a garbage specifier and
     // a message about `rollupOptions.external`, i.e. red on a correct tree, pointing at the
     // wrong file. A gate that cries wolf is the failure mode this whole script exists to
     // prevent, so the pattern now requires an actual `import`/`export … from` statement.

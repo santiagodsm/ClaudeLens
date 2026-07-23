@@ -9,6 +9,7 @@
     "node": ">=24.0.0 <25"
   },
   "main": "out/main/index.cjs",
+  "packageManager": "pnpm@9.15.4",
   "scripts": {
     "postinstall": "electron-rebuild --force --only better-sqlite3-electron",
     "dev": "electron-vite dev",
@@ -19,8 +20,8 @@
     "typecheck": "tsc --build --force",
     "build": "electron-vite build && node scripts/check-bundle-externals.mjs",
     "test": "vitest run",
-    "check": "npm run guard && npm run format:check && npm run lint && npm run typecheck && npm run build && npm run test",
-    "e2e": "npm run build && playwright test -c e2e/playwright.config.ts",
+    "check": "pnpm run guard && pnpm run format:check && pnpm run lint && pnpm run typecheck && pnpm run build && pnpm run test",
+    "e2e": "pnpm run build && playwright test -c e2e/playwright.config.ts",
     "launcher": "node scripts/make-launcher.mjs"
   },
   "dependencies": {
@@ -62,5 +63,12 @@
     "typescript-eslint": "8.65.0",
     "vite": "7.3.6",
     "vitest": "4.1.10"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3",
+      "better-sqlite3-electron",
+      "electron"
+    ]
   }
 }

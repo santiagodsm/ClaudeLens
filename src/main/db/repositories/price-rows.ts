@@ -8,7 +8,7 @@
 // the §3.11 POLICY — non-overlap enforcement, auto-versioning, hand-corrected dates. This file
 // owns only the SQL those policies are expressed in. Splitting them is what the query seam is
 // for, and it is not optional: a `SELECT … FROM` literal under `src/main/pricing/**` fails
-// `npm run lint` (verified).
+// `pnpm run lint` (verified).
 //
 // ⚠️ `price_rows` is USER class (§2.2, ADR-026): never purged, never dropped, never truncated by
 // a migration (INV-12). Nothing in this file deletes a row except `deleteById`, which exists for

@@ -112,7 +112,7 @@ static void show_dialog(const char *message) {
 /*
  * Suppressed when CLAUDE_LENS_LAUNCHER_NO_DIALOG is set (how the test suite exercises
  * every failure path without a window server — STACK ADR-018's boundary: nothing in
- * `npm run check` opens a GUI) and when stderr is a terminal (someone is debugging from
+ * `pnpm run check` opens a GUI) and when stderr is a terminal (someone is debugging from
  * a shell and can read the text there).
  */
 __attribute__((noreturn)) static void fail(const char *message) {
@@ -357,7 +357,7 @@ static repo_status_t repo_status(const char *dir) {
 /* failure this project exists to refuse (CLAUDE.md §1), and the person most  */
 /* exposed to it is whoever is actively developing the repository.            */
 /*                                                                            */
-/* ⚠️ It DETECTS; it never builds. The reasoning that kept `npm run build`    */
+/* ⚠️ It DETECTS; it never builds. The reasoning that kept `pnpm run build`    */
 /* out of the launcher is unchanged and still right: a build can fail, and    */
 /* this window cannot show you why. So the user is told, and chooses.         */
 /*                                                                            */
@@ -464,7 +464,7 @@ int main(void) {
          "\n"
          "Rebuild the launcher: open Terminal, cd into the Claude Lens repository and run\n"
          "\n"
-         "    npm run launcher");
+         "    pnpm run launcher");
   }
 
   /* self = <app>/Contents/MacOS/claude-lens  ->  bundle = <app> */
@@ -478,7 +478,7 @@ int main(void) {
          "\n"
          "Rebuild the launcher: open Terminal, cd into the Claude Lens repository and run\n"
          "\n"
-         "    npm run launcher");
+         "    pnpm run launcher");
   }
 
   char repo[PATH_MAX];
@@ -565,7 +565,7 @@ int main(void) {
         "\n"
         "Alternatively, move the repository onto the internal disk and run\n"
         "\n"
-        "    npm run launcher\n"
+        "    pnpm run launcher\n"
         "\n"
         "again. Nothing is wrong with the installation.",
         denied);
@@ -590,7 +590,7 @@ int main(void) {
         "\n"
         "To fix it: open Terminal, cd into the Claude Lens repository and run\n"
         "\n"
-        "    npm run launcher -- --install\n"
+        "    pnpm run launcher -- --install\n"
         "\n"
         "which regenerates this launcher against the repository's current location.",
         detail);
@@ -615,8 +615,8 @@ int main(void) {
         "\n"
         "To fix it: open Terminal, cd into that folder and run\n"
         "\n"
-        "    npm install\n"
-        "    npm run build",
+        "    pnpm install\n"
+        "    pnpm run build",
         repo);
     fail(message);
   }
@@ -679,7 +679,7 @@ int main(void) {
         "\n"
         "and run\n"
         "\n"
-        "    npm run build          (or 'npm run check' to build and verify)\n"
+        "    pnpm run build          (or 'pnpm run check' to build and verify)\n"
         "\n"
         "then open Claude Lens again.\n"
         "\n"
@@ -731,9 +731,9 @@ int main(void) {
                    "\n"
                    "and run\n"
                    "\n"
-                   "    npm install\n"
+                   "    pnpm install\n"
                    "\n"
-                   "then run 'npm run launcher' again if the Electron version changed.",
+                   "then run 'pnpm run launcher' again if the Electron version changed.",
                    electron, repo);
     fail(message);
   }
@@ -766,7 +766,7 @@ int main(void) {
                  "\n"
                  "and run\n"
                  "\n"
-                 "    rm -rf node_modules && npm install",
+                 "    rm -rf node_modules && pnpm install",
                  electron, repo);
   fail(message);
 }

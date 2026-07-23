@@ -51,7 +51,7 @@ directory (default `~/.claude`, always a setting — never a literal path), pars
 and a **guarded Harness Manager** with a **Bloat Radar** that can delete and clean — always behind
 confirm, automatic backup, undo, and an audit trail.
 
-It ships as source. `npm install && npm run dev`. There is no packaged build (STACK ADR-016).
+It ships as source. `pnpm install && pnpm run dev`. There is no packaged build (STACK ADR-016).
 
 ## §1.2 Users
 
@@ -59,7 +59,7 @@ Exactly one person per installation: a heavy solo Claude Code user with ~1 GB of
 sprawling harness they cannot see the shape of. Single user, single machine, one dataset at a time.
 No accounts, no tenancy, no permission model (STACK ADR-017). The repo is public, so *other* people
 run it — each of them also a single user pointed at their own directory. **No personal path and no
-personal data may appear in any committed file** (STACK ADR-015, `npm run guard`).
+personal data may appear in any committed file** (STACK ADR-015, `pnpm run guard`).
 
 ## §1.3 The daily loop (what the architecture is optimised for)
 
@@ -1693,7 +1693,7 @@ never be one: §2.1's zero-inference rule is unchanged.
 
 **There is no HTTP API, no port, no server** (STACK ADR-003). The contract is a single typed channel
 map in `src/shared/ipc-contract.ts`, compiled against by both the main process and the renderer, so
-drift is a `typecheck` failure inside `npm run check` — which is why `api-contract-sync` is `no` in
+drift is a `typecheck` failure inside `pnpm run check` — which is why `api-contract-sync` is `no` in
 the gate manifest. The preload exposes it over `contextBridge` with `contextIsolation: true`,
 `nodeIntegration: false`, `sandbox: true`.
 
@@ -2758,7 +2758,7 @@ metric. This assertion fails in the metric's own terms and names the session.
 | INV-12 | A purge or migration never writes to, truncates, or drops `price_rows`, `settings` or `audit_log`. |
 | INV-13 | Harness Manager invocation counts, "last used", "never used" and the runtime overlay are computed over the **full dataset** and are unaffected by the global filter. The UI labels them "all time". |
 | INV-14 | No path under `<claudeDir>/.claude-lens-backups/` appears in `file_manifest`, in any analytics query result, in any `bloat_flags` row, or in the watcher's event stream — except as the target of ACT-06. |
-| INV-15 | No `fetch`/`XMLHttpRequest`/`WebSocket`/`http`/`https`/`net` reference exists outside `src/main/pricing/fetch-price-table.ts` (STACK ADR-015, enforced by `npm run lint`). |
+| INV-15 | No `fetch`/`XMLHttpRequest`/`WebSocket`/`http`/`https`/`net` reference exists outside `src/main/pricing/fetch-price-table.ts` (STACK ADR-015, enforced by `pnpm run lint`). |
 | INV-16 | The renderer imports nothing from `src/main/**`, `better-sqlite3*`, `node:fs`, `node:path` or `electron` (STACK ADR-008/015). |
 | INV-17 | Every scanner, parser and action entry point takes its root directory as a parameter; no module resolves `claudeDir` implicitly (STACK ADR-013). |
 | **INV-18** | **No purge, rebuild, migration or sync deletes a row whose `archive_id IS NOT NULL`, and archiving changes no metric.** Every aggregate in §5.9 returns byte-identical results immediately before and immediately after an ACT-07, and again after a full purge-and-rebuild (fixture F-04, ADR-033). |
@@ -3386,7 +3386,7 @@ keyed by `(channel, args)` and invalidated by `evt:dataChanged` scopes.**
 application** (STACK ADR-015, INV-15). Enforced by ESLint `no-restricted-globals` on `fetch`,
 `XMLHttpRequest`, `WebSocket`, `EventSource` plus `no-restricted-imports` on `node:http(s)`,
 `node:net`, `node:tls`, `node:dgram`, `axios`, `undici`, `node-fetch` — globally, with a single-file
-allowlist override. It runs on `npm run check`, every time.
+allowlist override. It runs on `pnpm run check`, every time.
 
 No telemetry, no analytics, no crash reporting, no update check, **no remote font and no remote
 asset** (§6.1), no API call of any other kind. **The app is fully functional with no network at all**;
@@ -3499,10 +3499,10 @@ that leaks or spins is a **product defect, not a performance nit**.
 | P-29 | **WCAG AA in both themes, verified not eyeballed**: body text ≥ 4.5:1, large numbers ≥ 3:1. An automated contrast assertion runs over every token pair in `tokens.css` as part of the test suite. ⚠️ **AMENDED 2026-07-22 (A-06):** the assertion found the design's own binding hues failed in **light** theme (every accent/semantic/categorical hue but violet below 3:1) and `--text-faint` failed 4.5:1 in **both** themes. Fixed by darker **light-theme-only** overrides of the hues and a raised `--text-faint` in both themes — see §6.1's AMENDED block. Dark theme hues unchanged; the stable-hue-per-series contract is preserved (only the rendered value changes per theme, not the index). The test now **asserts the targets and fails on any regression** — the earlier `KNOWN_BELOW_BAR` pin table is removed. |
 | P-30 | Full keyboard navigation of sidebar, tables and graph selection; visible focus rings on every interactive element; `aria-label` on every icon button. |
 | P-31 | `prefers-reduced-motion: reduce` disables all non-essential animation (FRONTEND §7). |
-| P-32 | **Exactly one network egress point**, proven by `npm run lint` on every run (INV-15). |
-| P-33 | **Zero personal paths or personal data in any git-tracked file**, proven by `npm run guard` on every run. |
+| P-32 | **Exactly one network egress point**, proven by `pnpm run lint` on every run (INV-15). |
+| P-33 | **Zero personal paths or personal data in any git-tracked file**, proven by `pnpm run guard` on every run. |
 | P-34 | **The real `~/.claude` is unreachable from any test**, by three independent mechanisms (STACK ADR-013/018). This app deletes files; this is a safety property, not a preference. |
-| P-35 | `npm audit --omit=dev` reports no unresolved high or critical advisory in runtime dependencies (`dependency-security-audit`, outside `check` because it needs network). |
+| P-35 | `pnpm audit --omit=dev` reports no unresolved high or critical advisory in runtime dependencies (`dependency-security-audit`, outside `check` because it needs network). |
 
 ---
 
@@ -3511,17 +3511,17 @@ that leaks or spins is a **product defect, not a performance nit**.
 ## §9.1 Environments
 
 **One: the developer's machine.** There is no staging, no production, no CI, no container, no
-orchestration (STACK ADR-016). `npm run dev` is development; `npm run build` produces bundles that
-`npm run e2e` drives; nothing is deployed anywhere.
+orchestration (STACK ADR-016). `pnpm run dev` is development; `pnpm run build` produces bundles that
+`pnpm run e2e` drives; nothing is deployed anywhere.
 
 ## §9.2 Distribution — there is no deploy target
 
-Clone, `npm install`, `npm run dev`. No `electron-builder`, no `electron-forge`, no packaging
+Clone, `pnpm install`, `pnpm run dev`. No `electron-builder`, no `electron-forge`, no packaging
 dependency installed at all, no signing, no notarization, no `.dmg`, no auto-update, no store, no
 release binary (STACK ADR-016).
 
 ⚠️ **AMENDED 2026-07-22 (ADR-038) — there is now a double-clickable app, and every sentence above
-is still true.** `npm run launcher` generates **`Claude Lens.app`**: an `Info.plist`, a ~70 KB
+is still true.** `pnpm run launcher` generates **`Claude Lens.app`**: an `Info.plist`, a ~70 KB
 executable and an `.icns`, which resolves this repository at run time and starts *its* Electron
 binary against *its* `out/`. It adds **no dependency** — a `.app` is a directory, and `sips`,
 `iconutil` and `codesign` ship with macOS. ⚠️ **Amended again the same day:** that executable is a
@@ -3531,16 +3531,16 @@ identity* and a `#!/bin/bash` bundle has none — see ADR-038. No certificate an
 account are involved; with no C compiler present it falls back to the shell script and warns. It
 is a **build output**: gitignored, never committed, because it
 records an absolute path to the checkout and P-33 fails the build on exactly that. It is **not a
-distribution artifact** and the distribution story is unchanged: clone, `npm install`,
-`npm run dev`. `--install` copies it into `/Applications` and is never what a bare invocation does.
-`npm run launcher` is **outside `npm run check`** for STACK ADR-018's reason; its tests are inside.
+distribution artifact** and the distribution story is unchanged: clone, `pnpm install`,
+`pnpm run dev`. `--install` copies it into `/Applications` and is never what a bare invocation does.
+`pnpm run launcher` is **outside `pnpm run check`** for STACK ADR-018's reason; its tests are inside.
 ⚠️ ADR-016's *"$99/yr Apple Developer Program prerequisite"* applies to shipping to **other
 people**, not to this — see ADR-038 for what was verified.
 
-The **release act** is publishing source that strangers `npm install`, so `release-runbook` verifies
-exactly that: a **cold clone on a machine with no prior state** runs `npm ci && npm run check` green —
+The **release act** is publishing source that strangers `pnpm install`, so `release-runbook` verifies
+exactly that: a **cold clone on a machine with no prior state** runs `pnpm install && pnpm run check` green —
 which is where STACK ADR-006's dual-ABI native install is most likely to fail and is this project's
-only real release risk — **plus one `npm run e2e` run**, because a cold clone that type-checks but
+only real release risk — **plus one `pnpm run e2e` run**, because a cold clone that type-checks but
 whose window does not open is not a release.
 
 ## §9.3 File locations
@@ -4215,12 +4215,12 @@ written into their sections and are not ADRs.
 >
 > **The honest new cost.** Building the **best** launcher now needs a C compiler — the free Xcode
 > Command Line Tools (`xcode-select --install`), not Xcode and not an Apple account. Building a
-> **working** launcher does not: with no compiler, `npm run launcher` falls back to the original
+> **working** launcher does not: with no compiler, `pnpm run launcher` falls back to the original
 > shell script and prints a warning that names the exact consequence (no code identity → never
 > listed under Files and Folders → cannot be granted access to an external or network volume).
 > It **warns, it never fails** — a cold clone without Command Line Tools must still get a working
-> launcher, which is ADR-016's standing concern, and `npm run launcher` is opt-in and outside
-> `npm run check` so nothing in the gate depends on a toolchain. The launcher tests accept either
+> launcher, which is ADR-016's standing concern, and `pnpm run launcher` is opt-in and outside
+> `pnpm run check` so nothing in the gate depends on a toolchain. The launcher tests accept either
 > shape, deciding which to demand by *actually compiling* a probe rather than by `which`, so
 > `check` stays self-contained-green on a machine with no compiler.
 >
@@ -4231,7 +4231,7 @@ written into their sections and are not ADRs.
 > **Constrains additionally:** `resources/launcher.c` (committed, the single source of the
 > launcher's behaviour); `scripts/make-launcher.mjs` (compile → assemble → sign, in that order).
 
-- **Decision:** `npm run launcher` generates **`Claude Lens.app`** — `Contents/Info.plist`, one
+- **Decision:** `pnpm run launcher` generates **`Claude Lens.app`** — `Contents/Info.plist`, one
   compiled ad-hoc-signed executable at `Contents/MacOS/claude-lens` (see the amendment above;
   originally a 4 KB shell script, now built from `resources/launcher.c`), and
   `Contents/Resources/icon.icns`
@@ -4240,9 +4240,9 @@ written into their sections and are not ADRs.
   against `out/`. **`--install` copies it into `/Applications`; a bare invocation never does**,
   because that is the one step that writes outside the repository. The bundle and the icon work
   directory are **build outputs — gitignored, never committed** (§9.2 amendment). Wired as
-  `npm run launcher`, and **deliberately outside `npm run check`**, for the same reason and on
-  the same boundary as `npm run e2e` (STACK ADR-018): `check` is self-contained-green on
-  `npm ci` and nothing else, and this needs macOS-only tooling plus a prior `electron-vite
+  `pnpm run launcher`, and **deliberately outside `pnpm run check`**, for the same reason and on
+  the same boundary as `pnpm run e2e` (STACK ADR-018): `check` is self-contained-green on
+  `pnpm install` and nothing else, and this needs macOS-only tooling plus a prior `electron-vite
   build`. Its *tests* are inside `check`, because they need neither.
 - **Who fired the trigger, and which one.** STACK **ADR-016** ended with *"Revisit if: the user
   asks for a double-clickable app."* **The user asked, on 2026-07-22.** This is that revisit,
@@ -4256,9 +4256,9 @@ written into their sections and are not ADRs.
   signature, which costs nothing and identifies nobody. No notarization. No `.dmg`. No
   auto-update. No store. No release binary. No CI release job. **The distribution story is
   unchanged and remains
-  `git clone && npm install && npm run dev`**; the launcher is a convenience for the one machine
+  `git clone && pnpm install && pnpm run dev`**; the launcher is a convenience for the one machine
   that already has the repository, and it is not a distributable artifact. `release-runbook`
-  still gates a cold clone running `npm ci && npm run check`, and does not gate this.
+  still gates a cold clone running `pnpm install && pnpm run check`, and does not gate this.
 - ⚠️ **ADR-016's stated cost was wrong, and correcting it is part of this decision.** ADR-016
   called a double-clickable app *"a scope change with a $99/yr Apple Developer Program
   prerequisite."* **That is true only for giving the app to somebody else.** Verified on this
@@ -4287,27 +4287,27 @@ written into their sections and are not ADRs.
   1. **It breaks if the repository moves.** The bundle built in place resolves its repository
      from its own location at run time and survives the whole checkout being moved or renamed;
      the copy in `/Applications` cannot, and falls back to the path recorded when it was
-     generated. Moving the repository means rerunning `npm run launcher -- --install`.
+     generated. Moving the repository means rerunning `pnpm run launcher -- --install`.
   2. **It is not distributable.** Sending it to anyone is sending a ~70 KB binary that points at
      a directory on *your* disk (a 5 KB shell script, before the amendment). That is not a
      regression — nothing was distributable before either.
-  3. **It must be regenerated after an Electron version bump or an `npm ci`,** which wipes
+  3. **It must be regenerated after an Electron version bump or an `pnpm install`,** which wipes
      `node_modules`. The launcher does not silently paper over this: a missing Electron binary
      is a dialog naming the path it expected.
   4. ⚠️ **(added by the amendment) The best launcher needs a C compiler, and a rebuild resets any
      TCC grant.** The free Xcode Command Line Tools, not Xcode and not an Apple account; with no
      compiler the shell launcher still works and the script says exactly what is lost. And
      because an ad-hoc signature's identity *is* its cdhash, every rebuild is a new identity —
-     a Privacy & Security grant has to be given again after `npm run launcher`.
+     a Privacy & Security grant has to be given again after `pnpm run launcher`.
   5. ⚠️ **(added by the amendment) It starts `out/`, so it runs whatever was last built.** For
      anyone actively developing this repository — which is everyone who has it — the default
-     state between a source edit and the next `npm run build` is a launcher that opens the app
+     state between a source edit and the next `pnpm run build` is a launcher that opens the app
      perfectly and silently runs the *previous* build. Nothing crashes, nothing looks wrong, and
      the numbers on screen were computed by older code: the desktop form of a silently wrong
      number. **The launcher therefore detects it and never fixes it.** Before exec it compares
      `out/main/index.cjs`'s mtime against the newest file under `src/` and against
      `package.json`; if source is newer it shows a dialog naming both timestamps and the file
-     that is ahead, gives `npm run build`, and offers **Open anyway** / **Cancel** — running a
+     that is ahead, gives `pnpm run build`, and offers **Open anyway** / **Cancel** — running a
      stale build deliberately is legitimate, running one unknowingly is not. It does **not**
      build, for the reason the original decision already gave: a build can fail and this window
      cannot show you why. It is bounded (`src/` only, `node_modules` and dot-directories skipped,
@@ -4350,7 +4350,7 @@ written into their sections and are not ADRs.
   the default Electron atom:** verified via `lsappinfo`, a LaunchServices-launched bundle keeps
   its own identity across the `exec` (`CFBundleIdentifier app.claude-lens.launcher`,
   `LSDisplayName Claude Lens`), so the Dock shows this icon and this name. ⚠️ Running Electron
-  straight from a shell — `npm run dev`, `npm run e2e` — does **not** go through LaunchServices
+  straight from a shell — `pnpm run dev`, `pnpm run e2e` — does **not** go through LaunchServices
   and still shows Electron's own identity. That is unchanged behaviour, not a regression, and
   fixing it would mean changing the application rather than the launcher.
 - **Rejected:** ***`electron-builder` and a self-contained ~250 MB bundle*** — the obvious
@@ -4362,15 +4362,15 @@ written into their sections and are not ADRs.
   Gatekeeper right-click dance ADR-016 rejected, and this launcher genuinely avoids — or signed,
   which is where the $99/yr actually applies; and a standing invitation for a later agent to
   "finish" the release pipeline. **All of that to package an app whose only user is the person
-  who cloned it.** *Adding the launcher to `npm run check`* — inherits macOS-only tooling and a
+  who cloned it.** *Adding the launcher to `pnpm run check`* — inherits macOS-only tooling and a
   prior build; STACK ADR-018's argument applies verbatim and a flaky `check` is worse than none.
   *Copying into `/Applications` by default* — it writes outside the repository, onto the user's
   system; opt-in or nothing. *Committing the generated `.app`* — it records an absolute path to
   the checkout, and P-33 fails the build on exactly that, correctly. *Patching Electron.app's own
-  `Info.plist` and `electron.icns` in `node_modules` so `npm run dev` also shows the mark* —
+  `Info.plist` and `electron.icns` in `node_modules` so `pnpm run dev` also shows the mark* —
   technically safe (that bundle is linker-signed with no sealed resources, so editing it breaks
   nothing) and rejected anyway: mutating `node_modules` from a build script is a surprise that
-  survives no `npm ci`, and it buys cosmetics in a developer command.
+  survives no `pnpm install`, and it buys cosmetics in a developer command.
 - **Constrains:** §9.2 (amended); `.gitignore`; `resources/icon.svg` as the single source of the
   mark; `resources/launcher.c` as the single source of the launcher's behaviour;
   `test/main/launcher/make-launcher.test.ts`, which asserts the bundle is well formed, the
@@ -5017,10 +5017,10 @@ is a deliberate decision, not a drift.
 
 # §12 — Definition of done (continuous gates)
 
-These hold at **every** epic boundary, not once at the end. `npm run check` proves most of them
+These hold at **every** epic boundary, not once at the end. `pnpm run check` proves most of them
 mechanically; the rest are dispatched gates from `STACK.md`'s manifest.
 
-## §12.1 Mechanical, on every `npm run check`
+## §12.1 Mechanical, on every `pnpm run check`
 
 | # | Assertion | Proven by |
 |---|---|---|
@@ -5043,12 +5043,12 @@ mechanically; the rest are dispatched gates from `STACK.md`'s manifest.
 | `docs-sync` | `DESIGN.md`, `PLAN.md`, `STACK.md` and the public `README.md` match the code. A metric definition changed in code and not in §5.9 is a defect. |
 | `db-migration-review` | Every schema change is a new numbered file; merged files are immutable; **no migration or purge touches `price_rows`, `settings`, `audit_log` or `archives`** (INV-12, ADR-026); and ⚠️ **any deletion from `events`, `sessions`, `tool_calls`, `subagent_runs`, `file_touches` or `file_manifest` without an `archive_id IS NULL` guard is a blocking finding** (INV-18, ADR-033). |
 | `design-token-lint` | No raw hex/rgb/hsl literal and no raw px spacing value outside `src/renderer/styles/tokens.css` (§6.1). |
-| `dependency-security-audit` | `npm audit --omit=dev` clean of high/critical (P-35). |
+| `dependency-security-audit` | `pnpm audit --omit=dev` clean of high/critical (P-35). |
 | `golden-fixture-review` | **Every story adding or changing a parser path, a metric definition, or a costing rule lands a fixture with a hand-computed inline expected value.** The named checklist is **§5.9.1 F-01…F-11**, and in particular: **F-01** active time across a subagent run (pins ADR-035 — a main-loop-only fixture proves nothing), **F-02** subagent roll-up (INV-02), **F-03** incremental == cold parse (INV-04), **F-04** archive survives re-sync *and* purge-and-rebuild (INV-18), **F-08/F-09** costing across a price change and with no applicable price row, **F-10** rate precision at `$0.3125/Mtok` (ADR-023 as amended), **F-12** aggregate active time across two sessions in one day (pins ADR-036's binding (C) and INV-21 — a one-session-per-day fixture proves nothing), **F-13** cross-project overlap in both the non-zero and zero cases (pins ADR-037, M-19/M-20 and INV-22 — a fixture whose overlap is incidentally zero proves nothing)., **F-14** active time on millisecond timestamps (pins M-07's unit clause — every other fixture places every event on a whole minute, so none of them can see a ms→seconds conversion bug). |
 | `guarded-action-review` | Every story touching `src/main/actions/**` demonstrates, with a test: confirm → **backup before mutate** → undo → audit entry; the backup-root exclusion from Bloat Radar, analytics and the watcher (INV-14); and that **nothing is ever auto-deleted, including backups**. For **ACT-07** additionally: the restore point is a verified move manifest (INV-07), a session's transcript and `subagents/` never split across roots (INV-20), `archiveRoot` is never inside or a parent of `claudeDir` (INV-19), **no metric changes across the archive** (INV-18), and **nothing under the archive root is ever deleted by the app**. |
 | `perf-profiling` | ⚠️ **Resolved by §8 to `yes`.** Targets **P-01…P-37** (35 in §8.2–§8.7 plus P-36/P-37 for ACT-07 archiving) are measurable and failable. **`harness-forge` must write `yes` back into `STACK.md`'s manifest table** — a `DEFERRED` row must not survive into the built harness. P-08 (200 ms) is the DuckDB trigger; P-13/P-14/P-15 are the nine-hour steady-state targets that the always-open trigger makes load-bearing. |
-| `e2e-smoke` | `npm run e2e` at epic boundaries: the app launches, onboarding accepts a fixture directory, a sync completes, **all eight views navigate and render** without an error boundary or console error, and the theme toggle flips `data-theme`. Read-only by construction — it never invokes a guarded action. **Fails loudly; never skips.** |
-| `release-runbook` | A **cold clone on a machine with no prior state** runs `npm ci && npm run check` green, plus one `npm run e2e` run. Authored from STACK ADR-016 + ADR-006 — **not** a substituted deployment template; there is no deploy target. |
+| `e2e-smoke` | `pnpm run e2e` at epic boundaries: the app launches, onboarding accepts a fixture directory, a sync completes, **all eight views navigate and render** without an error boundary or console error, and the theme toggle flips `data-theme`. Read-only by construction — it never invokes a guarded action. **Fails loudly; never skips.** |
+| `release-runbook` | A **cold clone on a machine with no prior state** runs `pnpm install && pnpm run check` green, plus one `pnpm run e2e` run. Authored from STACK ADR-016 + ADR-006 — **not** a substituted deployment template; there is no deploy target. |
 
 ## §12.3 Product-level done
 
@@ -5064,6 +5064,6 @@ mechanically; the rest are dispatched gates from `STACK.md`'s manifest.
   between, and Settings names where its transcripts went (INV-18, F-04).
 - The app survives a nine-hour idle window inside P-13/P-14/P-15, and appending to a transcript while
   it is open moves the numbers within P-04 **without stealing focus or re-animating a chart**.
-- `README.md` explains what it is, prerequisites, `npm install && npm run dev`, how to set the data
+- `README.md` explains what it is, prerequisites, `pnpm install && pnpm run dev`, how to set the data
   directory, the measured parse time, the source-only distribution note, and the single-egress
   guarantee. No personal path appears in it.

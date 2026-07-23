@@ -2,7 +2,7 @@
 //
 // There is no HTTP API, no port, no server (STACK ADR-003). Both the main process and the
 // renderer compile against this one file, so IPC drift is a `typecheck` failure inside
-// `npm run check` — which is exactly why `api-contract-sync` is `no` in the gate manifest
+// `pnpm run check` — which is exactly why `api-contract-sync` is `no` in the gate manifest
 // (§4 preamble, ADR-031). It follows that this file must be COMPLETE, not a subset: a
 // channel that lives only in a handler is a channel the compiler cannot police.
 //

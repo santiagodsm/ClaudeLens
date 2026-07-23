@@ -10,7 +10,7 @@ import tailwindcss from '@tailwindcss/vite';
  * `require()`d from a CJS main bundle throws at runtime, *after* the build passes.
  * That is why this config sets `rollupOptions.external` explicitly instead of using
  * `externalizeDepsPlugin`, and why `scripts/check-bundle-externals.mjs` re-asserts it
- * against the emitted bundle on every `npm run build`.
+ * against the emitted bundle on every `pnpm run build`.
  *
  * Both install names are listed because they are the same package installed twice under
  * two names for the two ABIs (STACK ADR-006). A compiled `.node` cannot be bundled.

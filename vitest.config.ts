@@ -17,7 +17,7 @@ import { defineConfig } from 'vitest/config';
  * `projects` — not the `workspace` field, which is deprecated since Vitest 3.2.
  */
 
-// e2e/ runs under Playwright via `npm run e2e` and is excluded from every glob here
+// e2e/ runs under Playwright via `pnpm run e2e` and is excluded from every glob here
 // (STACK ADR-018). It is not a Vitest project and must never become one.
 const ALWAYS_EXCLUDE = [
   '**/node_modules/**',

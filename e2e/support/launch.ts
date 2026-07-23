@@ -2,7 +2,7 @@
  * STACK ADR-018 — the Electron launcher for the smoke suite, and the three safety extensions.
  *
  * ⚠️⚠️ **This is the one context in the project where a mistake reaches the delete subsystem.**
- * ADR-013's Vitest `setupFiles` tripwire does not run here: `npm run e2e` launches the real
+ * ADR-013's Vitest `setupFiles` tripwire does not run here: `pnpm run e2e` launches the real
  * application in a **separate process**, where no Vitest setup file ever loads. Read ADR-013 and
  * ADR-018 together; neither is complete alone. Three protections, all required, all present here:
  *
@@ -40,7 +40,7 @@ const SANDBOX_ROOT_NAME = 'claude-lens-e2e';
 /** ADR-018 precondition 1 — `e2e` runs against the build output, never against source. */
 const MAIN_BUNDLE = join(REPO_ROOT, 'out', 'main', 'index.cjs');
 
-/** ADR-018 precondition 2 — installed by `npm ci` via the existing `electron` devDependency. */
+/** ADR-018 precondition 2 — installed by `pnpm install` via the existing `electron` devDependency. */
 const ELECTRON_BINARY = join(REPO_ROOT, 'node_modules', '.bin', 'electron');
 
 export interface LaunchedApp {
@@ -81,13 +81,13 @@ function assertPreconditions(): void {
   if (!existsSync(MAIN_BUNDLE)) {
     throw new Error(
       `[claude-lens e2e] no build output at ${MAIN_BUNDLE}. ` +
-        '`npm run e2e` runs `npm run build` first; run it, or run the build by hand. ' +
+        '`pnpm run e2e` runs `pnpm run build` first; run it, or run the build by hand. ' +
         'The smoke suite tests the built app, never source (STACK ADR-018 precondition 1).',
     );
   }
   if (!existsSync(ELECTRON_BINARY)) {
     throw new Error(
-      `[claude-lens e2e] no Electron binary at ${ELECTRON_BINARY}. Run \`npm ci\`. ` +
+      `[claude-lens e2e] no Electron binary at ${ELECTRON_BINARY}. Run \`pnpm install\`. ` +
         '(STACK ADR-018 precondition 2 — the binary comes from the `electron` devDependency; ' +
         'Playwright downloads no browsers for this project.)',
     );

@@ -2,22 +2,22 @@
 //
 // What can be tested without a GUI, and nothing that needs one. In particular:
 //   - nothing here copies into the real /Applications (that is the one step of
-//     `npm run launcher` that writes outside the repository, and it is opt-in);
+//     `pnpm run launcher` that writes outside the repository, and it is opt-in);
 //   - nothing here launches a window — that boundary is STACK ADR-018's, and
-//     `npm run check` inherits no GUI precondition (CLAUDE.md §4).
+//     `pnpm run check` inherits no GUI precondition (CLAUDE.md §4).
 //
 // Every bundle is built inside a per-test sandbox (STACK ADR-013): no test names a fixed
 // path, and the repository's own `Claude Lens.app` is never touched by the suite.
 //
 // The load-bearing assertion is `contains no absolute path`. The generated launcher lands in
-// a gitignored bundle, but `npm run guard` also scans untracked-but-not-ignored files (P-33),
+// a gitignored bundle, but `pnpm run guard` also scans untracked-but-not-ignored files (P-33),
 // and the launcher is one `--out` away from being written somewhere the gate can see it. The
 // safe property is not "we remembered to gitignore it" but "the bytes cannot contain one" —
 // which is why that check reads the executable as a buffer and works for either shape.
 //
 // ⚠️ TWO SHAPES, AND THE SUITE MUST ACCEPT BOTH (ADR-038 as amended 2026-07-22). The
 // executable is a compiled, ad-hoc-signed Mach-O when a C compiler is present, and the old
-// shell script when it is not. Asserting "Mach-O" unconditionally would make `npm run check`
+// shell script when it is not. Asserting "Mach-O" unconditionally would make `pnpm run check`
 // red on a cold clone with no Xcode Command Line Tools, which is exactly the failure mode
 // ADR-016 exists to avoid and would make `check` a gate nobody believes (CLAUDE.md §4). So
 // the tests detect the compiler the same way the generator does — by compiling — and assert
@@ -49,12 +49,12 @@ const EXEC_REL = `${APP_DIR_NAME}/Contents/MacOS/claude-lens`;
 const PLIST_REL = `${APP_DIR_NAME}/Contents/Info.plist`;
 const ICNS_REL = `${APP_DIR_NAME}/Contents/Resources/icon.icns`;
 
-/** Split so this file does not itself contain the literal `npm run guard` fails on. */
+/** Split so this file does not itself contain the literal `pnpm run guard` fails on. */
 const HOME_PREFIX = `/${'Users'}/`;
 
 /**
  * The ten renditions `iconutil` requires for a complete iconset, built rather than written
- * out: `npm run guard`'s email-address rule reads a literal `icon_16x16` + `@` + `2x.png` as an
+ * out: `pnpm run guard`'s email-address rule reads a literal `icon_16x16` + `@` + `2x.png` as an
  * address, and it is right to — the pattern is indistinguishable. Composing the name keeps the
  * gate honest instead of adding an exception to it.
  */
@@ -312,7 +312,7 @@ describe('ADR-038 — the launcher fails loudly, never silently', () => {
 
     expect(status).not.toBe(0);
     expect(stderr).toContain('has not been built yet');
-    expect(stderr).toContain('npm run build');
+    expect(stderr).toContain('pnpm run build');
     // The message names the repository it looked in — an error the user cannot act on is
     // the desktop equivalent of a silently wrong number (CLAUDE.md §1).
     expect(stderr).toContain(repo);
@@ -334,7 +334,7 @@ describe('ADR-038 — the launcher fails loudly, never silently', () => {
 
     expect(status).not.toBe(0);
     expect(stderr).toContain('cannot find its source repository');
-    expect(stderr).toContain('npm run launcher');
+    expect(stderr).toContain('pnpm run launcher');
   });
 
   it('warns when the build is older than the source it was built from', () => {
@@ -349,7 +349,7 @@ describe('ADR-038 — the launcher fails loudly, never silently', () => {
     const { status, stderr } = runLauncher(join(repo, EXEC_REL));
 
     expect(stderr).toContain('out-of-date build');
-    expect(stderr).toContain('npm run build');
+    expect(stderr).toContain('pnpm run build');
     expect(stderr).toContain(join(repo, 'src/main/index.ts'));
 
     // It warned and carried on: the run still reaches — and fails at — the Electron check.

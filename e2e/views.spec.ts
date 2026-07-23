@@ -4,7 +4,7 @@
  *
  * ⚠️ This is the spec that would have caught the E4↔E6 gap from the outside. Seventeen `q:*`
  * channels returned `notImplemented` over a finished data layer, and five of the eight views
- * rendered an `ErrorState` in the running app while every Vitest project was green. `npm run
+ * rendered an `ErrorState` in the running app while every Vitest project was green. `pnpm run
  * check` cannot see that: `build` proves the bundles compile and the `renderer` project proves
  * components mount under jsdom against **stubbed** channels. Only a real window over a real main
  * process answers the question.

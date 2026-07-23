@@ -2,7 +2,7 @@
 // `no-restricted-properties` rule is off for this single file and nowhere else.
 //
 // It is also where the ADR-018 E2E tripwire lives as production code: ADR-013's Vitest
-// `setupFiles` assertion cannot cover `npm run e2e`, which launches the real application in
+// `setupFiles` assertion cannot cover `pnpm run e2e`, which launches the real application in
 // a separate process where setup files never load. This file is the one place every path
 // resolution already goes through, so the assertion cannot be reached by accident.
 // ⚠️ Read ADR-013 and ADR-018 together; neither is complete alone.

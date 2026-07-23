@@ -6,7 +6,7 @@ import { createRequire } from 'node:module';
 import type { DatabaseConstructor, SqliteDatabase, SqliteOpenOptions } from './sqlite';
 
 /**
- * ⚠️ STACK ADR-006 — the single decision that determines whether `npm run check` can be green.
+ * ⚠️ STACK ADR-006 — the single decision that determines whether `pnpm run check` can be green.
  *
  * `better-sqlite3` is a NAN/V8 addon, not N-API, so one compiled `.node` cannot serve two
  * runtimes. The app runs under Electron (ABI 146); Vitest runs under Node (ABI 137). The

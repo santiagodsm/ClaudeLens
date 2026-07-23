@@ -4,7 +4,7 @@
 //    write." (§5.8 rule 3.)
 //
 // ⚠️⚠️ NO TEST IN THIS FILE PERFORMS REAL NETWORK I/O. Every case injects a `fetchImpl` stub or
-// points at a local fixture document. `npm run check` must run on a plane (STACK "The check
+// points at a local fixture document. `pnpm run check` must run on a plane (STACK "The check
 // command": self-contained-green, "no service, no container, no env var, no network"). A test that
 // reached the network would make the gate environmental, and an environmental gate teaches agents
 // to disbelieve it.

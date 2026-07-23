@@ -1,8 +1,8 @@
 /**
  * STACK ADR-018 — the Playwright config for the Electron smoke suite.
  *
- * ⚠️ **`npm run e2e` is NOT part of `npm run check` and must never be added to it.** `check`'s
- * defining property is that it is self-contained-green off `npm ci` alone; this suite needs a
+ * ⚠️ **`pnpm run e2e` is NOT part of `pnpm run check` and must never be added to it.** `check`'s
+ * defining property is that it is self-contained-green off `pnpm install` alone; this suite needs a
  * built app, the Electron binary and an **interactive macOS GUI session** (there is no Xvfb
  * equivalent on macOS). Folding it in makes `check` inherit all three, and a `check` that fails
  * environmentally teaches agents to disbelieve it — which is worse than having no check.

@@ -1,7 +1,7 @@
 // Type-level tests for src/shared/ipc-contract.ts — DESIGN §4, ADR-031.
 //
 // ⚠️ This file is the E1 half of the IPC-drift gate. §4's preamble and ADR-031 say drift must
-// be "a `typecheck` failure inside `npm run check`", which is why `api-contract-sync` is `no`
+// be "a `typecheck` failure inside `pnpm run check`", which is why `api-contract-sync` is `no`
 // in the gate manifest: there is no generated artifact to diff, because THE COMPILER IS THE
 // GATE. So the assertions below are mostly compile-time. A `@ts-expect-error` here fails
 // `tsc --build` if the error it expects stops happening — which is precisely the property

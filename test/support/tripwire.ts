@@ -7,7 +7,7 @@
 // This app deletes files. A test that resolves the real `~/.claude` is not a flaky test, it
 // is data loss on the author's own machine.
 //
-// ⚠️ This mechanism is Vitest-only and does NOT cover `npm run e2e`, which launches the real
+// ⚠️ This mechanism is Vitest-only and does NOT cover `pnpm run e2e`, which launches the real
 // application in a separate process where setup files never load. STACK ADR-018 extends it:
 // the same assertion lives in `src/main/config/paths.ts` as production code under
 // `CLAUDE_LENS_E2E=1`. Read ADR-013 and ADR-018 together; neither is complete alone.

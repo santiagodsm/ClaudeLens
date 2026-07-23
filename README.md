@@ -27,11 +27,11 @@ It reads your history; it does not change it.
 ```
 git clone https://github.com/buenos-diaz-inc/ClaudeLens.git
 cd ClaudeLens
-npm install
-npm run dev
+pnpm install
+pnpm run dev
 ```
 
-`npm install` fetches everything and downloads the prebuilt database binaries. `npm run dev`
+`pnpm install` fetches everything and downloads the prebuilt database binaries. `pnpm run dev`
 opens the app.
 
 ## First run
@@ -47,8 +47,8 @@ If you would rather double-click an icon than open a terminal, build a small
 `Claude Lens.app` and drop it in your Dock:
 
 ```
-npm run build
-npm run launcher -- --install
+pnpm run build
+pnpm run launcher -- --install
 ```
 
 Two honest things to know, because both have tripped people up:
@@ -86,13 +86,13 @@ Claude Lens is built to run with no network at all, and it does.
 ## Contributing / development
 
 ```
-npm run check      # the full gate: format, lint, types, build, and tests
-npm run e2e        # smoke suite that launches the real window (needs a GUI session)
+pnpm run check      # the full gate: format, lint, types, build, and tests
+pnpm run e2e        # smoke suite that launches the real window (needs a GUI session)
 ```
 
-`npm run check` is self-contained — it needs `npm install` and nothing else: no service, no
+`pnpm run check` is self-contained — it needs `pnpm install` and nothing else: no service, no
 network, no environment setup. It is the one command that says whether a change is good.
-`npm run e2e` is separate on purpose, because it needs a built app and a real macOS desktop
+`pnpm run e2e` is separate on purpose, because it needs a built app and a real macOS desktop
 session to open a window in.
 
 The product thinking lives in `PRD.md`, the technology choices in `STACK.md`, the build

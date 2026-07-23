@@ -66,7 +66,7 @@ describe('the ADR-018 production tripwire (CLAUDE_LENS_E2E=1)', () => {
   const sandbox = useSandbox();
 
   it('refuses a Claude data directory under the real <home>/.claude', () => {
-    // ⚠️ ADR-013's Vitest `setupFiles` tripwire does NOT cover `npm run e2e`, which launches
+    // ⚠️ ADR-013's Vitest `setupFiles` tripwire does NOT cover `pnpm run e2e`, which launches
     // the real app in a process where setup files never load. This assertion is the production
     // half; neither is complete alone.
     withE2eFlag('1', () => {

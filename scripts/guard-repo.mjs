@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-// npm run guard — the non-TypeScript half of INVARIANT 4 (P-33, STACK ADR-015).
+// pnpm run guard — the non-TypeScript half of INVARIANT 4 (P-33, STACK ADR-015).
 //
 // This repository is published. ESLint covers `src/**/*.ts`; a personal path actually leaks
 // through the files ESLint never sees — a README example, a JSON snapshot, a committed
 // fixture, a doc. So this greps every file that is committed OR on its way to being
-// committed, and it runs FIRST in `npm run check` so the publicly-shared-repo invariant
+// committed, and it runs FIRST in `pnpm run check` so the publicly-shared-repo invariant
 // fails before anything expensive.
 //
 // ⚠️ Scope (A-10 gate log): the index is NOT the scope. Scanning `git ls-files` alone made
