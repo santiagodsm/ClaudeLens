@@ -1011,9 +1011,12 @@ function SameProjectsCard(): JSX.Element {
                 {group.members.map((member) => (
                   <li
                     key={member.encodedName}
+                    // §3.3, §7.8/P-33 — the encoded name is an absolute personal path (the
+                    // identity). It disambiguates on hover only; it is never visible text a
+                    // screenshot could leak. The display name is the only project string shown.
+                    title={member.encodedName}
                     className="flex items-center gap-2 text-micro text-text-muted"
                   >
-                    <span className="font-mono text-text-faint">{member.encodedName}</span>
                     {/* ⚠️ A folder that is not currently present is SHOWN as such, never hidden
                         and never deleted on the app's own initiative. */}
                     <span>

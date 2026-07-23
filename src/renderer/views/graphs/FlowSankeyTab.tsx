@@ -39,7 +39,7 @@ import { MAX_RENDERED_GRAPH_NODES } from '../../lib/limits';
 import { useAppStore } from '../../store/app-store';
 import { unionBoxes, type Box } from './camera';
 import { GraphSurface, SvgNode } from './GraphSurface';
-import { NodeInspector } from './NodeInspector';
+import { NodeInspector, type InspectorRow } from './NodeInspector';
 import { GRAPH_TAB_BY_ID } from './tabs';
 import { useGraphCamera } from './use-graph-camera';
 import { ZoomControls } from './ZoomControls';
@@ -201,6 +201,31 @@ export function buildSankey(data: FlowSankey, limit = MAX_RENDERED_GRAPH_NODES):
   }
 }
 
+/** The id at either end of a link, whether the link still holds a string or a laid-out node. */
+function endpointId(end: string | SankeyNode): string {
+  return typeof end === 'string' ? end : end.id;
+}
+
+/**
+ * The "flowing in" / "flowing out" rows for the inspected node — its incoming and outgoing output
+ * tokens. Shown only when non-zero, so a first stage (out only) and a last stage (in only) each
+ * say only what is true of them, rather than an "in: 0" that reads like missing data (§6.12).
+ */
+function sankeyFlowRows(id: string, links: readonly SankeyLink[]): InspectorRow[] {
+  let incoming = 0;
+  let outgoing = 0;
+  for (const link of links) {
+    if (endpointId(link.target) === id) incoming += link.value;
+    if (endpointId(link.source) === id) outgoing += link.value;
+  }
+  const rows: InspectorRow[] = [];
+  if (incoming > 0)
+    rows.push({ label: 'Output tokens flowing in', value: formatInteger(incoming) });
+  if (outgoing > 0)
+    rows.push({ label: 'Output tokens flowing out', value: formatInteger(outgoing) });
+  return rows;
+}
+
 export function FlowSankeyTab(): JSX.Element {
   const filter = useAppStore((state) => state.filter);
   const query = useQuery('q:flowSankey', filter);
@@ -216,11 +241,15 @@ export function FlowSankeyTab(): JSX.Element {
         label={selectedNode.label}
         kind={selectedNode.kind}
         colorIndex={selectedNode.colorIndex}
+        // ⚠️ The Harness Map inspector reads "measured facts first, in plain words" (§6.7, §1a);
+        // the Sankey's fact is the output tokens through the band, plus what flows in and out of
+        // it when those differ from a bare total (a first or last stage has only one side).
         rows={[
           {
             label: 'Output tokens through it',
             value: formatInteger(selectedNode.value ?? 0),
           },
+          ...sankeyFlowRows(selectedNode.id, model.links),
         ]}
         note="Band width is output tokens. A tool call carries no tokens of its own, so an assistant message's output is credited to the tool it called first — every message's tokens appear exactly once in each stage."
       />

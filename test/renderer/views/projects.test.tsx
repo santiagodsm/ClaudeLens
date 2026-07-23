@@ -319,8 +319,14 @@ describe('§6.8 Projects & Code — saying two projects are the same (ADR-040)',
 
     fireEvent.click(screen.getByTestId('project-card-open'));
     const panel = await screen.findByTestId('project-group-members');
-    expect(within(panel).getByText('-work-demo-family-app-old')).toBeInTheDocument();
-    expect(within(panel).getByText('-work-demo-family-app-new')).toBeInTheDocument();
+    // §3.3, §7.8/P-33 — the folder BASENAME is visible; the encoded name (an absolute personal
+    // path) disambiguates the two same-named folders on hover only, never as visible text a
+    // screenshot could leak. Both folders read "Photo-Booth"; their titles tell them apart.
+    expect(within(panel).getAllByText('Photo-Booth')).toHaveLength(2);
+    expect(panel).not.toHaveTextContent('-work-demo-family-app-old');
+    expect(panel).not.toHaveTextContent('-work-demo-family-app-new');
+    expect(within(panel).getByTitle('-work-demo-family-app-old')).toBeInTheDocument();
+    expect(within(panel).getByTitle('-work-demo-family-app-new')).toBeInTheDocument();
     // ⚠️ The honest caption: 20m + 20m is not the card's 55m, and the screen says why in plain
     // words rather than leaving two numbers that look like they should add up (§1a).
     expect(panel).toHaveTextContent('do not add up');
@@ -340,5 +346,95 @@ describe('§6.8 Projects & Code — saying two projects are the same (ADR-040)',
     for (const jargon of [/merge/i, /entity/i, /ADR-/, /M-0/, /§/, /unit id/i, /encoded/i]) {
       expect(bar.textContent ?? '').not.toMatch(jargon);
     }
+  });
+});
+
+/**
+ * §3.3, §7.8/P-33 — the encoded name is a personal absolute path (home directory, username). It
+ * is the project's identity and disambiguates two folders that share a display name, but it may
+ * appear ONLY in a hover `title`, never as visible text a screenshot or share could leak. The
+ * display name is the one project string that may be rendered. This is the same class of leak as
+ * the Flow Sankey's encoded-name label; this suite is the durable guard for the project surfaces.
+ *
+ * The synthetic encoded names below use the ENCODED form (hyphen-separated), exactly as the real
+ * data does — `-Users-<name>-…` — which is what carries the username onto the screen.
+ */
+describe('§3.3/§7.8 — the encoded path is a tooltip, never visible text (P-33)', () => {
+  /** Encoded-path fragments that must never appear in visible text, on any project surface. */
+  const LEAK_SHAPES: readonly RegExp[] = [/-Users-/, /-Volumes-/, /-home-/];
+
+  it('a lone card shows the display name only; its encoded path lives in a title', async () => {
+    const secret = projectCard({
+      projectId: 1,
+      displayName: 'Secret',
+      encodedName: '-Users-alex-Projects-Secret',
+      members: [
+        {
+          projectId: 1,
+          displayName: 'Secret',
+          encodedName: '-Users-alex-Projects-Secret',
+          colorIndex: 0,
+          outputTokens: 1,
+          sessions: 1,
+          toolCalls: 0,
+          activeSeconds: 60,
+        },
+      ],
+    });
+    const { view } = renderView(
+      <ProjectsView />,
+      stubs({ 'q:projectCards': () => ok(projectCards({ rows: [secret] })) }),
+    );
+    const card = await screen.findByTestId('project-card');
+    // Visible: the display name.
+    expect(within(card).getByText('Secret')).toBeInTheDocument();
+    // Not visible anywhere on the view: the encoded path or its username-bearing shapes.
+    const text = view.container.textContent ?? '';
+    expect(text).not.toContain('-Users-alex-Projects-Secret');
+    for (const shape of LEAK_SHAPES) expect(text).not.toMatch(shape);
+    // Available on hover for disambiguation (§3.3).
+    expect(screen.getByTitle('-Users-alex-Projects-Secret')).toBeInTheDocument();
+  });
+
+  it('the group folders panel shows basenames only; encoded paths live in titles', async () => {
+    const group = projectCard({
+      projectId: -3,
+      groupId: 3,
+      displayName: 'Secret',
+      encodedName: null,
+      activeSeconds: 120,
+      members: [
+        {
+          projectId: 1,
+          displayName: 'Secret',
+          encodedName: '-Users-alex-Projects-Secret',
+          colorIndex: 0,
+          outputTokens: 1,
+          sessions: 1,
+          toolCalls: 0,
+          activeSeconds: 60,
+        },
+        {
+          projectId: 2,
+          displayName: 'Secret',
+          encodedName: '-Volumes-ExtSSD-Secret',
+          colorIndex: 2,
+          outputTokens: 1,
+          sessions: 1,
+          toolCalls: 0,
+          activeSeconds: 60,
+        },
+      ],
+    });
+    const { view } = renderView(
+      <ProjectsView />,
+      stubs({ 'q:projectCards': () => ok(projectCards({ rows: [group] })) }),
+    );
+    fireEvent.click(await screen.findByTestId('project-card-open'));
+    await screen.findByTestId('project-group-members');
+    const text = view.container.textContent ?? '';
+    for (const shape of LEAK_SHAPES) expect(text).not.toMatch(shape);
+    expect(screen.getByTitle('-Users-alex-Projects-Secret')).toBeInTheDocument();
+    expect(screen.getByTitle('-Volumes-ExtSSD-Secret')).toBeInTheDocument();
   });
 });

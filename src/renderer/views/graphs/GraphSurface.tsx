@@ -46,6 +46,8 @@ interface DragState {
   clientX: number;
   clientY: number;
   moved: boolean;
+  /** Whether the pointer has been captured yet — see `onPointerDown`/`onPointerMove` below. */
+  captured: boolean;
 }
 
 export function GraphSurface({
@@ -130,17 +132,22 @@ export function GraphSurface({
       className="h-full w-full cursor-grab touch-none select-none active:cursor-grabbing"
       onPointerDown={(event) => {
         if (event.button !== 0) return;
+        // ⚠️⚠️ **Capture is deferred to the first real drag movement, NOT taken here** (fix,
+        // 2026-07-22). Capturing the pointer on pointer-down breaks click-node-to-inspect in
+        // Chromium: with capture active, the browser dispatches the `click` to the capturing
+        // `<svg>` (the common ancestor of the down/up dispatch targets) rather than to the node
+        // `<g>` under the cursor, so the node's own `onClick` never fires and the background
+        // handler deselects instead — "clicking a node does nothing". jsdom does not model this,
+        // which is why it went unseen in tests. Capturing only once the pointer has actually
+        // moved past the slop keeps drag-to-pan working (a pan that leaves the element still
+        // tracks) while leaving a plain click to land on the node.
         drag.current = {
           pointerId: event.pointerId,
           clientX: event.clientX,
           clientY: event.clientY,
           moved: false,
+          captured: false,
         };
-        // Not available in every environment the renderer tests run under; the drag still works
-        // without it, it just stops tracking if the pointer leaves the element.
-        if (typeof event.currentTarget.setPointerCapture === 'function') {
-          event.currentTarget.setPointerCapture(event.pointerId);
-        }
       }}
       onPointerMove={(event) => {
         const active = drag.current;
@@ -148,6 +155,14 @@ export function GraphSurface({
         const dx = event.clientX - active.clientX;
         const dy = event.clientY - active.clientY;
         const moved = active.moved || Math.abs(dx) > DRAG_SLOP || Math.abs(dy) > DRAG_SLOP;
+        // Take the capture the moment the gesture becomes a drag, so a pan that runs off the
+        // element keeps delivering moves. Not available in every environment the renderer tests
+        // run under; the drag still works without it, it just stops tracking off-element.
+        let captured = active.captured;
+        if (moved && !captured && typeof event.currentTarget.setPointerCapture === 'function') {
+          event.currentTarget.setPointerCapture(event.pointerId);
+          captured = true;
+        }
         const box = geometry();
         // Drag-to-pan means the content follows the pointer, so the *window* moves the other way.
         camera.panBy(-dx * box.x, -dy * box.y);
@@ -156,6 +171,7 @@ export function GraphSurface({
           clientX: event.clientX,
           clientY: event.clientY,
           moved,
+          captured,
         };
       }}
       onPointerUp={(event) => {

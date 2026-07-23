@@ -128,10 +128,11 @@ export function detectBloat(input: BloatInput): BloatFlagInput[] {
       sizeBytes: best.sizeBytes,
       itemCount: siblings.length,
       rationale:
+        // §1a — plain words on screen; the ACT-04/ACT-05 catalogue ids stay in the comment below.
         `${file.relPath} is 0 bytes, while ${best.relPath} beside it holds ` +
         `${formatBytes(best.sizeBytes)}. Restoring the backup copies that file over the empty ` +
         'one; nothing is authored and nothing else is touched. If the empty file is the ' +
-        'intended state, deleting it (ACT-05) is the other confirmed option.',
+        'intended state, deleting the empty file is the other confirmed option.',
       // ⚠️ §5.11 offers "ACT-04 or ACT-05" for this rule but §3.12 carries ONE `action_type` per
       // flag. ACT-04 (restore) is the non-destructive of the two and is chosen for the button;
       // the destructive alternative is named in the rationale rather than wired to a click.
@@ -174,11 +175,14 @@ export function detectBloat(input: BloatInput): BloatFlagInput[] {
       location: skill.relPath,
       sizeBytes: skill.sizeBytes,
       itemCount: 1,
+      // §1a — plain words on screen. "all time, not the current filter" carries INV-13 in words;
+      // "an irreversible act the app deliberately won't make one-click easy" carries §5.11.
       rationale:
         `${skill.name} has 0 recorded invocations across the whole dataset — all time, not the ` +
-        'current filter (INV-13). That claim is only as good as the transcripts on disk, so ' +
-        'Claude Lens offers no button here: deleting a skill on this evidence is exactly the ' +
-        'irreversible act it must not make easy (§5.11). Remove it yourself if you agree.',
+        'current filter. That claim is only as good as the transcripts on disk, so Claude Lens ' +
+        'offers no button here: deleting a skill on this evidence is exactly the kind of ' +
+        "irreversible act the app deliberately won't make one-click easy. Remove it yourself if " +
+        'you agree.',
       // ⚠️ NULL by design (§5.11, §11.2). Do not "complete the pattern" by wiring an action.
       actionType: null,
       actionPayload: null,
@@ -256,11 +260,11 @@ export function detectBloat(input: BloatInput): BloatFlagInput[] {
       location: '*.bak, *.plaud-bak, backups/',
       sizeBytes: strayBytes,
       itemCount: strayCount,
+      // §1a — plain words on screen; INV-14 (never flag our own backup root) stays in the comment.
       rationale:
         `${String(strayCount)} stray backup file(s) and folder(s) totalling ` +
         `${formatBytes(strayBytes)}, all outside Claude Lens's own restore-point folder — the ` +
-        'app never flags or touches its own backups (INV-14). These are copies something else ' +
-        'left behind.',
+        'app never flags or touches its own backups. These are copies something else left behind.',
       actionType: 'delete-duplicate-config-backups',
       actionPayload: {
         relPaths: [

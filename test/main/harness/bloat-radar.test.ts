@@ -48,7 +48,10 @@ describe('§5.11 — the closed rule set', () => {
     // one is wired to the button; the destructive alternative is named in the rationale only.
     expect(flag?.actionType).toBe('restore-claude-md');
     expect(flag?.actionPayload).toEqual({ relPath: 'CLAUDE.md', backupRelPath: 'CLAUDE.md.bak' });
-    expect(flag?.rationale).toContain('ACT-05');
+    // §1a — the destructive alternative is named in plain words on screen, never by its
+    // catalogue id. The ACT-04/ACT-05 pairing lives in the code comment, not the rationale.
+    expect(flag?.rationale).toContain('deleting the empty file');
+    expect(flag?.rationale).not.toContain('ACT-05');
   });
 
   it('BR-02 — an orphaned skill folder needs BOTH no SKILL.md and 0 B of content', async () => {
@@ -181,6 +184,62 @@ describe('§5.11 — the closed rule set', () => {
     await rm(sandbox.resolve('claude-replace', 'a', 'config.bak'));
     await service.scan();
     expect(service.bloatList().rows.some((row) => row.ruleId === 'BR-06')).toBe(false);
+  });
+
+  /**
+   * §1a — "no jargon reaches the screen", the MAIN-PROCESS backstop.
+   *
+   * Bloat Radar's `title` and `rationale` are built here in the main process and render verbatim
+   * in the Harness Manager (§6.9), so the renderer-only no-jargon sweep never sees them. This is
+   * the durable guard that a re-introduced `(INV-13)`, `(§5.11)` or `(ACT-05)` in a generated
+   * rationale fails a test rather than shipping onto the user's screen. It exercises every rule at
+   * once so no rule's copy is exempt.
+   */
+  it('⚠️ §1a — no rule title or rationale carries an internal identifier', async () => {
+    const { service } = await scan(
+      {
+        'CLAUDE.md': '', // BR-01 (names the destructive alternative in prose)
+        'CLAUDE.md.bak': '# the real rules\n',
+        'skills/orphan/': '', // BR-02
+        'skills/orphan/empty.txt': '',
+        'skills/unused/SKILL.md': '---\nname: unused\n---\nbody\n', // BR-03 (all-time / §5.11 in prose)
+        'settings.json': '{"enabledPlugins":[]}',
+        'plugins/m/stale/plugin.json': '{"name":"stale"}', // BR-04
+        'projects/-a/s1.jsonl': 'x'.repeat(200), // BR-05
+        'a/config.bak': 'aa', // BR-06 (INV-14 in prose)
+      },
+      64,
+    );
+    const rows = service.bloatList().rows;
+    // The three rules whose de-jargoned prose must actually be exercised by this sweep.
+    for (const ruleId of ['BR-01', 'BR-03', 'BR-06']) {
+      expect(
+        rows.map((row) => row.ruleId),
+        `expected ${ruleId} to be produced so its copy is checked`,
+      ).toContain(ruleId);
+    }
+
+    // The user directive's identifier shapes (§1a): metric, invariant, ADR, rule, action, perf
+    // and fixture ids, plus the section sign. Faithful to test/renderer/views/no-jargon.test.tsx,
+    // now enforced on the strings the main process generates.
+    const JARGON: readonly RegExp[] = [
+      /\bM-\d/,
+      /\bINV-\d/,
+      /\bADR-\d/,
+      /\bBR-\d/,
+      /\bACT-\d/,
+      /\bP-\d/,
+      /\bF-\d/,
+      /§\d/,
+    ];
+    for (const row of rows) {
+      for (const pattern of JARGON) {
+        expect(row.title, `${row.ruleId} title carries ${String(pattern)}`).not.toMatch(pattern);
+        expect(row.rationale, `${row.ruleId} rationale carries ${String(pattern)}`).not.toMatch(
+          pattern,
+        );
+      }
+    }
   });
 
   it('counts only actionable, non-archive flags as reclaimable (§5.11)', async () => {

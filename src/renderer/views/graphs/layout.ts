@@ -11,9 +11,10 @@
  * colour and spacing; a graph coordinate is neither).
  */
 
-/** Horizontal distance between layers, and vertical distance between siblings. */
+/** Gap between layers (bands), between rows, and between sub-columns *within* a layer. */
 export const LAYER_GAP = 260;
 export const ROW_GAP = 72;
+export const COL_GAP = 200;
 
 export interface PlacedNode {
   readonly id: string;
@@ -22,20 +23,52 @@ export interface PlacedNode {
 }
 
 /**
- * Places each layer in its own column, centred vertically against the tallest layer.
+ * Places each layer in its own band, centred vertically against the tallest band.
+ *
+ * ⚠️⚠️ **A layer wraps into several sub-columns instead of one tall column** (fix, 2026-07-22).
+ * The Harness Map's real graphs are dominated by one kind — hundreds of files, or (after the
+ * P-23 cap) 500 tools — and the old one-column-per-layer placement stacked all of them into a
+ * single column `n × ROW_GAP` tall and barely `LAYER_GAP` wide. Fit-to-content then scaled that
+ * ~1300 × 20000 box to fit a wide canvas by its *height*, leaving the graph a ~40 px vertical
+ * stripe: the reported symptom. Wrapping a big layer across `⌈√total⌉` rows gives the whole graph
+ * a broad, near-filling aspect instead, and the layout still fills the wider canvas rather than
+ * hiding in the middle of it.
  *
  * The order **within** a layer is the caller's; this function never sorts, because the caller is
  * the one that knows whether "alphabetical" or "chronological" is the honest reading. What it
- * guarantees is that a given ordering always lands on the same coordinates.
+ * guarantees is that a given ordering always lands on the same coordinates — no clock, no
+ * randomness, no measurement; two calls with the same input return identical coordinates.
  */
 export function layoutLayers(layers: readonly (readonly string[])[]): PlacedNode[] {
-  const tallest = layers.reduce((max, layer) => Math.max(max, layer.length), 0);
+  const total = layers.reduce((sum, layer) => sum + layer.length, 0);
+  if (total === 0) return [];
+
+  // A square-ish target for the whole graph: the tallest a sub-column is allowed to grow before
+  // the layer wraps into another sub-column. `⌈√total⌉` keeps a small graph a single column per
+  // layer (so a 6-node map reads exactly as before) and a 500-node layer a broad grid.
+  const rowsPerColumn = Math.max(1, Math.ceil(Math.sqrt(total)));
+
+  // Rows each layer actually occupies, for vertical centring against the tallest.
+  const layerRows = layers.map((layer) => Math.min(layer.length, rowsPerColumn));
+  const tallest = layerRows.reduce((max, rows) => Math.max(max, rows), 0);
+
   const placed: PlacedNode[] = [];
-  layers.forEach((layer, column) => {
-    const offset = ((tallest - layer.length) * ROW_GAP) / 2;
-    layer.forEach((id, row) => {
-      placed.push({ id, x: column * LAYER_GAP, y: offset + row * ROW_GAP });
+  let cursorX = 0;
+  layers.forEach((layer, index) => {
+    // An empty layer takes no width and leaves no gap — a leading empty band would push the whole
+    // graph off to one side of the canvas for no reason.
+    if (layer.length === 0) return;
+    const rows = layerRows[index] ?? 0;
+    const offset = ((tallest - rows) * ROW_GAP) / 2;
+    const subColumns = Math.ceil(layer.length / rowsPerColumn);
+    layer.forEach((id, i) => {
+      const subColumn = Math.floor(i / rowsPerColumn);
+      const row = i % rowsPerColumn;
+      placed.push({ id, x: cursorX + subColumn * COL_GAP, y: offset + row * ROW_GAP });
     });
+    // Advance past this layer's own sub-columns, then leave the wider between-layer gap so the
+    // bands still read left to right (containers → orchestrators → workers → tools → files).
+    cursorX += (subColumns - 1) * COL_GAP + LAYER_GAP;
   });
   return placed;
 }

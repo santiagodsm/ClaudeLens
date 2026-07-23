@@ -297,7 +297,12 @@ describe('§6.10 Settings — projects you have said are the same (ADR-040)', ()
     renderView(<SettingsView />, stubs({ 'groups:list': () => ok({ rows: [GROUP] }) }));
     const card = await screen.findByTestId('settings-card-project-groups');
     expect(within(card).getByTestId('project-group-7')).toHaveTextContent('Family App');
-    expect(within(card).getByText('-work-demo-family-app-old')).toBeInTheDocument();
+    // §3.3, §7.8/P-33 — the encoded name is an absolute personal path; it is available on hover
+    // (title) to disambiguate, but is never visible text a screenshot could leak. The present
+    // folder shows its display name; the encoded path sits in the row's title only.
+    expect(within(card).getByText('Photo-Booth')).toBeInTheDocument();
+    expect(card).not.toHaveTextContent('-work-demo-family-app-old');
+    expect(within(card).getByTitle('-work-demo-family-app-old')).toBeInTheDocument();
     // ⚠️ Reported, never hidden and never deleted on the app's own initiative — and reassuring,
     // because the data really is still counted.
     expect(within(card).getByTestId('project-group-7')).toHaveTextContent(

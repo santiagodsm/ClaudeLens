@@ -156,6 +156,35 @@ describe('layout — the same data produces the same picture twice', () => {
   // The unlinked-lane placement that used to be tested here went with the Execution Trace's
   // node-link diagram (2026-07-22). The lane itself did not: it is a labelled band of rows on the
   // timeline now, and `execution-trace.test.tsx` asserts it by its caption and its rows.
+
+  // ⚠️ Bug 1 (2026-07-22): the Harness Map rendered as a ~40 px vertical stripe because a whole
+  // kind — hundreds of files, or 500 tools after the P-23 cap — stacked into ONE tall column.
+  // Fit-to-content then scaled that narrow-and-very-tall box by its height, hiding the graph in a
+  // sliver. A dominant layer now wraps across sub-columns so the bounding box is broad, not tall.
+  it('⚠️ spreads a layer of many nodes across the width instead of one tall stripe', () => {
+    const many = Array.from({ length: 300 }, (_unused, i) => `n${String(i)}`);
+    const placed = layoutLayers([many]);
+    const xs = placed.map((node) => node.x);
+    const ys = placed.map((node) => node.y);
+    const width = Math.max(...xs) - Math.min(...xs);
+    const height = Math.max(...ys) - Math.min(...ys);
+
+    // The layer is drawn as a grid, not a single column: many distinct x positions…
+    expect(new Set(xs).size).toBeGreaterThan(1);
+    // …and the result is wider than it is tall — the opposite of the reported stripe, whose
+    // width/height ratio was on the order of 0.007.
+    expect(width).toBeGreaterThan(height);
+  });
+
+  it('leaves a small graph exactly one column per layer, unchanged', () => {
+    // The wrapping must not disturb the common case: a handful of nodes still reads as clean
+    // left-to-right columns, so the 6-node demo map looks as it always did.
+    expect(layoutLayers([['a', 'b'], ['c']])).toEqual([
+      { id: 'a', x: 0, y: 0 },
+      { id: 'b', x: 0, y: ROW_GAP },
+      { id: 'c', x: LAYER_GAP, y: ROW_GAP / 2 },
+    ]);
+  });
 });
 
 describe('ADR-011 — cytoscape’s layout really is deterministic', () => {

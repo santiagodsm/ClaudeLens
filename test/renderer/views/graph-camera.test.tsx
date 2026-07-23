@@ -496,6 +496,56 @@ describe('§6.7 Flow Sankey — the last stage is inside the frame', () => {
     });
   });
 
+  it('inspects a node’s incoming and outgoing output tokens, in plain words', async () => {
+    renderView(<GraphsView />, stubs());
+    openTab('sankey');
+    const nodes = await screen.findAllByTestId('sankey-node');
+    const model = nodes.find(
+      (node) => node.getAttribute('aria-label')?.startsWith('claude-test-1') === true,
+    );
+    fireEvent.click(model as Element);
+    const rows = within(await screen.findByTestId('node-inspector')).getByTestId(
+      'node-inspector-rows',
+    );
+    // The model takes 1,000 tokens in from the project and passes 600 + 400 out to the two tools.
+    expect(rows).toHaveTextContent('Output tokens flowing in');
+    expect(rows).toHaveTextContent('Output tokens flowing out');
+  });
+
+  // ⚠️⚠️ The reported "clicking a Sankey node does nothing" (2026-07-22). The click was wired the
+  // whole time, but the surface captured the pointer on pointer-DOWN, and in Chromium that hands
+  // the subsequent `click` to the capturing <svg> — so it hit the background deselect, not the
+  // node. jsdom does not model capture-retargets-click, so this pins the cause directly: no
+  // capture on a plain click, capture only once a real drag begins.
+  it('⚠️ does not capture the pointer on a plain click, so the click reaches the node', async () => {
+    renderView(<GraphsView />, stubs());
+    openTab('sankey');
+    const surface = await screen.findByTestId('sankey-surface');
+    const captured: number[] = [];
+    surface.setPointerCapture = (id: number) => {
+      captured.push(id);
+    };
+
+    fireEvent.pointerDown(surface, { button: 0, pointerId: 9, clientX: 120, clientY: 120 });
+    fireEvent.pointerUp(surface, { pointerId: 9, clientX: 120, clientY: 120 });
+    expect(captured).toEqual([]);
+  });
+
+  it('captures the pointer once a drag passes the slop, so a pan still tracks off-element', async () => {
+    renderView(<GraphsView />, stubs());
+    openTab('sankey');
+    const surface = await screen.findByTestId('sankey-surface');
+    withSize('sankey-surface', 800, 400);
+    const captured: number[] = [];
+    surface.setPointerCapture = (id: number) => {
+      captured.push(id);
+    };
+
+    fireEvent.pointerDown(surface, { button: 0, pointerId: 10, clientX: 400, clientY: 200 });
+    fireEvent.pointerMove(surface, { pointerId: 10, clientX: 300, clientY: 150 });
+    expect(captured).toContain(10);
+  });
+
   it('shows §6.7’s empty copy rather than an empty camera when there is nothing to draw', async () => {
     renderView(<GraphsView />, stubs({ 'q:flowSankey': () => ok({ nodes: [], links: [] }) }));
     openTab('sankey');

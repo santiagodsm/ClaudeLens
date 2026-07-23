@@ -210,13 +210,21 @@ function ProjectCard({
           type="button"
           onClick={onOpen}
           data-testid="project-card-open"
+          // §3.3, §7.8/P-33 — a lone project's encoded name is an absolute personal path
+          // (username, home dir). It is the identity, so it disambiguates two folders that share
+          // a display name, but only on hover (title), never as visible text that a screenshot
+          // could leak. The display name is the only project string that may be rendered.
+          title={card.encodedName ?? undefined}
           className="flex min-w-0 flex-1 items-center gap-2 text-left"
         >
           <Badge colorIndex={card.colorIndex}>{card.displayName}</Badge>
-          <span className="ml-auto truncate font-mono text-micro text-text-faint">
-            {/* ADR-040 — a group has no folder of its own, so it says how many it stands for. */}
-            {card.encodedName ?? `${String(card.members.length)} folders`}
-          </span>
+          {/* ADR-040 — a group has no folder of its own, so it says how many it stands for.
+              A lone project shows nothing here: its encoded name lives in the button's title. */}
+          {card.encodedName === null && (
+            <span className="ml-auto truncate font-mono text-micro text-text-faint">
+              {`${String(card.members.length)} folders`}
+            </span>
+          )}
         </button>
       </div>
       {grouped && (

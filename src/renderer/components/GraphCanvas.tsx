@@ -13,7 +13,7 @@
  * the graph is complete (§11.7).
  */
 
-import type { JSX, ReactNode } from 'react';
+import { useLayoutEffect, useRef, useState, type JSX, type ReactNode } from 'react';
 import type { AppError } from '../../shared/ipc-contract';
 import { cx } from '../lib/cx';
 import { formatInteger } from '../lib/format';
@@ -21,6 +21,14 @@ import { MAX_RENDERED_GRAPH_NODES } from '../lib/limits';
 import { EmptyState } from './EmptyState';
 import { ErrorState } from './ErrorState';
 import { LoadingState } from './LoadingState';
+
+/**
+ * The floor the canvas never shrinks below (matches the old `min-h-96` = 24rem), and the breathing
+ * room left under it so the card stops just short of the viewport edge rather than forcing a
+ * scrollbar. Plain numbers, so React writes them as px without a raw-px literal in the source.
+ */
+const CANVAS_MIN_HEIGHT = 384;
+const CANVAS_BOTTOM_GAP = 24;
 
 export interface GraphCanvasProps {
   title: string;
@@ -77,10 +85,34 @@ export function GraphCanvas({
     (nodeCount === undefined ? undefined : Math.min(nodeCount, MAX_RENDERED_GRAPH_NODES));
   const capped = nodeCount !== undefined && drawn !== undefined && drawn < nodeCount;
 
+  // ⚠️ **The canvas fills the window** (fix, 2026-07-22). The shell above this card is a stack of
+  // content-height grids — nothing hands the card a height to fill — so a fixed `min-h-96` left a
+  // tall window mostly empty with the graph cramped into a strip at the top (worst on the Harness
+  // Map). Rather than reach up and re-plumb the whole shell's height chain, the card measures its
+  // own top against the viewport and grows to the bottom, re-measuring on resize so it re-fits
+  // when the window changes size. A sensible floor keeps it usable in a short window.
+  const sectionRef = useRef<HTMLElement | null>(null);
+  const [availableHeight, setAvailableHeight] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const element = sectionRef.current;
+    if (element === null) return;
+    const measure = (): void => {
+      const top = element.getBoundingClientRect().top;
+      setAvailableHeight(Math.max(CANVAS_MIN_HEIGHT, window.innerHeight - top - CANVAS_BOTTOM_GAP));
+    };
+    measure();
+    window.addEventListener('resize', measure);
+    return () => {
+      window.removeEventListener('resize', measure);
+    };
+  }, []);
+
   return (
     <section
+      ref={sectionRef}
       data-testid={testId}
       aria-label={title}
+      style={availableHeight === null ? undefined : { minHeight: availableHeight }}
       className={cx(
         'relative flex min-h-0 flex-col rounded-card border border-border bg-bg-surface shadow-card',
         className,

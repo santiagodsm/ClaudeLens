@@ -273,6 +273,32 @@ describe('GraphCanvas — shell only; E11 fills the canvas', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Close inspector' }));
     expect(onClose).toHaveBeenCalledOnce();
   });
+
+  // ⚠️ Bug 1 (2026-07-22): the canvas grew to fill the window instead of sitting in a small fixed
+  // box. It sizes itself to the viewport (its top → the bottom), so a taller window is a taller
+  // canvas — not the old ~384 px strip that left a large window mostly empty.
+  it('⚠️ grows to fill the window rather than a small fixed height, and re-fits on resize', () => {
+    const original = window.innerHeight;
+    try {
+      Object.defineProperty(window, 'innerHeight', { value: 900, configurable: true });
+      render(
+        <GraphCanvas title="Harness map" nodeCount={3}>
+          <p>canvas</p>
+        </GraphCanvas>,
+      );
+      const section = screen.getByTestId('graph-canvas');
+      const tall = Number.parseFloat(section.style.minHeight);
+      // Not the old fixed strip: a 900 px window yields a canvas far taller than 384 px.
+      expect(tall).toBeGreaterThan(384);
+
+      // A taller window is a taller canvas — the height tracks the container, it is not a constant.
+      Object.defineProperty(window, 'innerHeight', { value: 1400, configurable: true });
+      fireEvent(window, new Event('resize'));
+      expect(Number.parseFloat(section.style.minHeight)).toBeGreaterThan(tall);
+    } finally {
+      Object.defineProperty(window, 'innerHeight', { value: original, configurable: true });
+    }
+  });
 });
 
 interface Row {

@@ -387,8 +387,13 @@ function GroupFolders({ card }: { card: ProjectCard }): JSX.Element {
           {
             id: 'folder',
             header: 'Folder',
+            // §3.3, §7.8/P-33 — the display name (folder basename) is the only project string
+            // that may be visible; the encoded name is an absolute personal path and appears on
+            // hover only, to disambiguate two folders that share a basename.
             render: (row) => (
-              <span className="font-mono text-micro text-text-primary">{row.encodedName}</span>
+              <span className="font-mono text-micro text-text-primary" title={row.encodedName}>
+                {row.displayName}
+              </span>
             ),
           },
           {
