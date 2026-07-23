@@ -345,9 +345,15 @@ function ProjectFilterMenu({
                   style={{ accentColor: 'var(--accent)' }}
                 />
                 <Badge colorIndex={row.colorIndex}>{row.displayName}</Badge>
-                <span className="ml-auto truncate font-mono text-micro text-text-faint">
-                  {optionTitle(row)}
-                </span>
+                {/* §3.3 / P-33 — the encoded name is the identity, but it embeds the absolute
+                    home path and username, so it lives ONLY in the label's `title` (hover) for
+                    disambiguation — never as visible text. A group shows its folder count, which
+                    carries no path. */}
+                {row.encodedName === null && (
+                  <span className="ml-auto truncate text-micro text-text-faint">
+                    {`${String(row.members.length)} folders`}
+                  </span>
+                )}
               </label>
               {/* "Show me just this one", from any selection, in one click. */}
               <button

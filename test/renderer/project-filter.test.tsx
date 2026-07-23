@@ -121,6 +121,23 @@ describe('⚠️ regression — "I select something but it appears I am unselect
   });
 });
 
+describe('§3.3 / P-33 — the encoded path is a tooltip, never visible text', () => {
+  it('does not render an encoded project path as visible text in the menu', async () => {
+    renderFilter();
+    await openMenu();
+
+    // Every fixture's encoded name (a stand-in for the real "-Users-<name>-…" path) must be
+    // absent from the visible text — it embeds the home dir and username (P-33). It lives only
+    // in a title attribute for disambiguation (§3.3).
+    for (const row of ROWS) {
+      expect(screen.queryByText(row.encodedName as string)).toBeNull();
+    }
+    // …and it IS reachable on hover: the label carries it as its title.
+    const label = checkbox(3).closest('label');
+    expect(label).toHaveAttribute('title', '-work-lens-wt-fix');
+  });
+});
+
 describe('§4.2 — the three states, and only three', () => {
   it('adds a second project without dropping the first', async () => {
     renderFilter();
@@ -248,14 +265,19 @@ describe('§3.3 — two projects may share a display name', () => {
     renderFilter();
     await openMenu();
 
-    // Same display name, different rows, different tooltips.
+    // Same display name, different rows — disambiguated by the encoded name in the tooltip only.
+    // ⚠️ P-33: the encoded name embeds the home path + username, so it is NEVER visible text —
+    // it lives solely in the row's `title` (§3.3). Two "lens" rows read identically on screen
+    // and are told apart on hover (and always act by id).
     expect(screen.getByTestId('project-filter-option-2')).toHaveAttribute('title', '-work-lens');
     expect(screen.getByTestId('project-filter-option-3')).toHaveAttribute(
       'title',
       '-work-lens-wt-fix',
     );
-    expect(screen.getByTestId('project-filter-option-2')).toHaveTextContent('-work-lens');
-    expect(screen.getByTestId('project-filter-option-3')).toHaveTextContent('-work-lens-wt-fix');
+    expect(screen.getByTestId('project-filter-option-2')).not.toHaveTextContent('-work-lens');
+    expect(screen.getByTestId('project-filter-option-3')).not.toHaveTextContent(
+      '-work-lens-wt-fix',
+    );
 
     fireEvent.click(checkbox(3));
     await waitFor(() => {
