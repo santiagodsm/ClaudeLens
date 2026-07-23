@@ -17,6 +17,7 @@ playwright-report
 Claude Lens (standalone).html
 PROGRESS.md
 ORCHESTRATION.md
+HANDOFF.md
 
 # Untracked because it leaks a real home path (`/Users/<author>/.claude`), which
 # `npm run guard` fails on for every git-tracked file. P-33 / STACK ADR-015: this
