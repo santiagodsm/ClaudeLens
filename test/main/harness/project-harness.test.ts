@@ -403,16 +403,24 @@ describe('ADR-039 exclusions — project harness is visible, never actionable', 
     const byLabel = new Map(graph.nodes.map((node) => [`${node.kind}:${node.label}`, node]));
 
     expect(byLabel.get('skill:orchestrate')).toBeDefined();
-    expect(byLabel.get('agent:builder')).toBeDefined();
     // §6.7's inspector must be able to say WHICH project a node came from: a Map that merges
     // several projects' orchestrators without saying so is worse than an empty one.
     expect(byLabel.get('skill:orchestrate')?.meta?.['scope']).toBe('project (read-only)');
     expect(byLabel.get('skill:orchestrate')?.meta?.['relPath']).toBe('.claude/skills/orchestrate');
 
+    // ⚠️ §6.7 / §1a — two `builder` nodes share the name here: the project's DECLARED agent and
+    // the transcript-only FALLBACK the same spawns also produce. That collision is disambiguated
+    // on the label (project-scoped → its project name, fallback → plain source words), so the
+    // project's builder is found by its SCOPE, not by a bare label that is no longer unique.
+    const builder = graph.nodes.find(
+      (node) => node.kind === 'agent' && node.meta?.['project'] !== undefined,
+    );
+    expect(builder).toBeDefined();
+    expect(builder?.label).toContain('builder');
+
     // ⚠️ Rule O-3 — the orchestrator hop. Two main-loop `Agent` calls naming `builder`, in this
     // project, from this project's own root CLAUDE.md.                                      = 2
     const orchestrator = byLabel.get('claude_md:CLAUDE.md');
-    const builder = byLabel.get('agent:builder');
     const edge = graph.edges.find(
       (candidate) => candidate.source === orchestrator?.id && candidate.target === builder?.id,
     );
@@ -506,9 +514,13 @@ describe('ADR-039 exclusions — project harness is visible, never actionable', 
     expect((await service.scan()).projectsResolved).toBe(2);
 
     const graph = new AnalyticsRepository(harness.db).harnessGraph();
-    const builders = graph.nodes.filter(
-      (node) => node.kind === 'agent' && node.label === 'builder',
-    );
+    // ⚠️ §6.7 / §1a — the three `builder` nodes all share the NAME `builder`, so their LABELS are
+    // now disambiguated (two by project name, the fallback by plain source words). They are the
+    // only agents here, so `kind === 'agent'` selects exactly them without depending on a label
+    // that the collision rule deliberately no longer leaves bare.
+    const builders = graph.nodes.filter((node) => node.kind === 'agent');
+    // No two of the three labels are identical — the property the disambiguation guarantees.
+    expect(new Set(builders.map((node) => node.label)).size).toBe(builders.length);
     // THREE nodes, and each one earns its place: one per project (two real definitions, which are
     // two different files) plus the unscoped `transcript` node. ⚠️ That third node is not
     // redundant — it is the fallback a project that SPAWNS `builder` without declaring it resolves

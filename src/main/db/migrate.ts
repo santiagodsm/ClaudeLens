@@ -18,6 +18,7 @@ import projectDisplayNameSql from './migrations/0006-project-display-name-from-c
 import projectGroupsSql from './migrations/0007-project-groups.sql?raw';
 import subagentSpawnSidecarSql from './migrations/0008-subagent-spawn-sidecar.sql?raw';
 import retainOrphanedHistorySql from './migrations/0009-retain-orphaned-history.sql?raw';
+import harnessNodeVersionSql from './migrations/0010-harness-node-version.sql?raw';
 import { DbError } from './errors';
 import type { SqliteDatabase } from './sqlite';
 
@@ -80,6 +81,12 @@ export const MIGRATIONS: readonly Migration[] = [
   // alongside archived ones, so a `claudeDir` change or a rebuild no longer silently shrinks
   // lifetime totals when a file has vanished. See the file header and ADR-041.
   { version: 9, name: '0009-retain-orphaned-history.sql', sql: retainOrphanedHistorySql },
+  // §6.7 / §1a — `harness_nodes.version`. A plugin cache can hold two versions of the same plugin
+  // side by side, each shipping a same-named skill; both are genuinely distinct nodes (§3.10 node
+  // identity), so both survive — but the Harness Map drew them with the SAME label. The plugin's
+  // own version, read from `plugin.json`, is the plain distinguisher `harnessGraph()` uses to
+  // qualify ONLY the labels that collide. NOT part of node identity. See the file header.
+  { version: 10, name: '0010-harness-node-version.sql', sql: harnessNodeVersionSql },
 ];
 
 /** The version the code expects a fully migrated database to be at. */

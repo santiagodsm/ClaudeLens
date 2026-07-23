@@ -190,6 +190,8 @@ export class HarnessService {
           mtimeMs: null,
           enabled: null,
           entryCount: null,
+          // Migration 0010 — a transcript-only node has no plugin manifest to read a version from.
+          version: null,
         });
       }
     };

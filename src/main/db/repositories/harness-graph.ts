@@ -71,6 +71,14 @@ export interface HarnessNodeInput {
    * value for every kind that is not a memory. It is never read as zero.
    */
   readonly entryCount: number | null;
+  /**
+   * Migration 0010 — §6.7 / §1a. The plugin's own declared version (from `plugin.json` /
+   * `marketplace.json` `version`), for the Harness Map's label disambiguation. `null` for every
+   * node that is not a plugin/marketplace, and for a manifest that declares none. It is NOT part
+   * of node identity (§3.10 `uq_harness_nodes`): two versions of a plugin already differ by
+   * `relPath`. Never read as a version of `0`.
+   */
+  readonly version: string | null;
 }
 
 /** One edge, naming its endpoints by node `key` rather than by row id. */
@@ -127,9 +135,9 @@ const DELETE_NODES = 'DELETE FROM harness_nodes';
 
 const INSERT_NODE = `INSERT INTO harness_nodes
   (kind, name, source, plugin_id, project_id, rel_path, role, description, size_bytes, mtime_ms,
-   enabled, entry_count)
+   enabled, entry_count, version)
   VALUES (@kind, @name, @source, @pluginId, @projectId, @relPath, @role, @description, @sizeBytes,
-          @mtimeMs, @enabled, @entryCount)`;
+          @mtimeMs, @enabled, @entryCount, @version)`;
 
 /** ADR-039 — the run→agent map is replaced whole beside the graph, in the same transaction. */
 const DELETE_RUN_AGENTS = 'DELETE FROM harness_run_agents';
@@ -247,6 +255,8 @@ export class HarnessGraphRepository extends Repository {
           mtimeMs: node.mtimeMs,
           enabled: node.enabled === null ? null : node.enabled ? 1 : 0,
           entryCount: node.entryCount,
+          // Migration 0010 — §6.7 / §1a. Present only on plugin/marketplace nodes.
+          version: node.version,
         });
         idByKey.set(key, Number(result.lastInsertRowid));
       }

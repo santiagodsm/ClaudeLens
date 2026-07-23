@@ -60,6 +60,13 @@ export interface HarnessNodeRow {
   readonly projectId: number | null;
   /** §3.3 `projects.display_name` — cosmetic, for the inspector only. Never an identity. */
   readonly projectName: string | null;
+  /**
+   * Migration 0010 — §6.7 / §1a. The plugin's own declared version, on plugin/marketplace nodes
+   * only. `harnessGraph()` reads it (directly for a plugin node, via `pluginId` for the skills it
+   * contains) to qualify a Harness Map label that would otherwise collide with a sibling of the
+   * same name. `null` for every non-plugin node. Never rendered except as a plain `(0.5.0)`.
+   */
+  readonly version: string | null;
 }
 
 /** One `harness_edges` row plus its M-14 runtime overlay. */
@@ -115,11 +122,12 @@ export class GraphStatsRepository extends Repository {
       readonly source: string;
       readonly project_id: number | null;
       readonly project_name: string | null;
+      readonly version: string | null;
     }>(
       `SELECT n.id AS id, n.kind AS kind, n.name AS name, n.role AS role,
               n.size_bytes AS size_bytes, n.rel_path AS rel_path, n.enabled AS enabled,
               n.plugin_id AS plugin_id, n.mtime_ms AS mtime_ms, n.description AS description,
-              n.source AS source, n.project_id AS project_id,
+              n.source AS source, n.project_id AS project_id, n.version AS version,
               p.display_name AS project_name
        FROM   harness_nodes n
        LEFT JOIN projects p ON p.id = n.project_id
@@ -138,6 +146,7 @@ export class GraphStatsRepository extends Repository {
       source: row.source,
       projectId: row.project_id,
       projectName: row.project_name,
+      version: row.version,
     }));
   }
 

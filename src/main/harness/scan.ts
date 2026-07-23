@@ -230,6 +230,10 @@ export async function scanHarness(claudeDir: string): Promise<HarnessScan> {
       // `enabledPlugins` names, so its enablement is genuinely not applicable: NULL, not 0.
       enabled: isPlugin ? enabled.has(name) : null,
       entryCount: null,
+      // Migration 0010 — §6.7 / §1a. The manifest's own `version`, so the Harness Map can qualify
+      // a label that collides (two versions of one plugin ship a same-named skill) with a plain
+      // `(0.5.0)` instead of leaving two identical labels on screen. `null` when undeclared.
+      version: stringField(manifest, 'version'),
     };
     nodes.push(node);
     (isPlugin ? pluginKeyByDir : marketplaceKeyByDir).set(dir, harnessNodeKey(node));
@@ -282,6 +286,8 @@ export async function scanHarness(claudeDir: string): Promise<HarnessScan> {
       mtimeMs: null,
       enabled: null,
       entryCount: null,
+      // Migration 0010 — a builtin tool has no plugin version.
+      version: null,
     };
     nodes.push(node);
     const key = harnessNodeKey(node);
@@ -306,6 +312,8 @@ export async function scanHarness(claudeDir: string): Promise<HarnessScan> {
       mtimeMs: null,
       enabled: null,
       entryCount: null,
+      // Migration 0010 — a declared file node has no plugin version.
+      version: null,
     };
     nodes.push(node);
     const key = harnessNodeKey(node);
@@ -340,6 +348,10 @@ export async function scanHarness(claudeDir: string): Promise<HarnessScan> {
         mtimeMs: file.mtimeMs,
         enabled: null,
         entryCount: null,
+        // Migration 0010 — §6.7 / §1a. A skill has no version of its own; its plugin does, so
+        // `harnessGraph()` reads the CONTAINING plugin's version (via `plugin_id`) when it needs
+        // to disambiguate this skill's label. `null` here keeps that fact in one place.
+        version: null,
       };
       nodes.push(node);
       const key = harnessNodeKey(node);
@@ -387,6 +399,9 @@ export async function scanHarness(claudeDir: string): Promise<HarnessScan> {
         mtimeMs: file.mtimeMs,
         enabled: null,
         entryCount: null,
+        // Migration 0010 — like a skill, an agent/command reads its plugin's version via
+        // `plugin_id`; the node carries none of its own.
+        version: null,
       };
       nodes.push(node);
       if (pluginKey !== null) {
@@ -414,6 +429,7 @@ export async function scanHarness(claudeDir: string): Promise<HarnessScan> {
         mtimeMs: file.mtimeMs,
         enabled: null,
         entryCount: null,
+        version: null, // Migration 0010 — not a plugin manifest.
       });
       continue;
     }
@@ -432,6 +448,7 @@ export async function scanHarness(claudeDir: string): Promise<HarnessScan> {
         mtimeMs: file.mtimeMs,
         enabled: null,
         entryCount: null,
+        version: null, // Migration 0010 — not a plugin manifest.
       });
       continue;
     }
@@ -453,6 +470,7 @@ export async function scanHarness(claudeDir: string): Promise<HarnessScan> {
         // DESIGN.md defines what an "entry" of a `MEMORY.md` is; §6.9's column renders the
         // definition beside the number rather than leaving a bare figure to be misread.
         entryCount: entryCountOf((await readTextOrNull(join(claudeDir, file.relPath))) ?? ''),
+        version: null, // Migration 0010 — not a plugin manifest.
       });
     }
   }

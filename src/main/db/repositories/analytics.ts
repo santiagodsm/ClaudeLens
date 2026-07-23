@@ -17,6 +17,7 @@ import { ActiveTimeRepository } from './active-time';
 import { CostRepository, costToWire, nullWhenUnpriced, type CostScope } from './cost';
 import { EventStatsRepository } from './event-stats';
 import { GraphStatsRepository } from './graph-stats';
+import { disambiguatedLabels, plainSourcePhrase, type LabelableNode } from './harness-labels';
 import { HarnessManagerRepository } from './harness-manager';
 import { ProjectGroupsRepository } from './project-groups';
 import { ProjectStatsRepository } from './project-stats';
@@ -421,6 +422,41 @@ export class AnalyticsRepository {
     const invocations = new Map(
       this.#graphs.skillInvocationCounts().map((row) => [row.nodeId, row.count]),
     );
+
+    // §6.7 / §1a — the label a node renders with. Node identity is `(kind, name, source, rel_path,
+    // project_id)` (§3.10), so two entities that share a `name:` are two nodes: a plugin cache
+    // holding two VERSIONS of one plugin, each shipping a same-named skill, is the concrete case.
+    // Both survive (dropping one would be a wrong dedup); the collision is resolved on the LABEL,
+    // qualified with a PLAIN distinguisher (the plugin's version) only where it actually collides.
+    // Migration 0010 lands the version on plugin/marketplace nodes; a skill reads its CONTAINING
+    // plugin's version via `plugin_id`. `harness-labels.ts` states the rule and guarantees no two
+    // labels are identical without inventing a distinguisher.
+    const pluginVersionById = new Map<number, string>();
+    const pluginNameById = new Map<number, string>();
+    for (const node of nodes) {
+      if (node.kind !== 'plugin' && node.kind !== 'marketplace') continue;
+      if (node.version !== null && node.version !== '')
+        pluginVersionById.set(node.id, node.version);
+      pluginNameById.set(node.id, node.name);
+    }
+    const labelInputs: LabelableNode[] = nodes.map((node) => ({
+      id: node.id,
+      name: node.name,
+      // A plugin/marketplace carries its OWN version; a contained node reads its plugin's.
+      pluginVersion:
+        node.version !== null && node.version !== ''
+          ? node.version
+          : node.pluginId !== null
+            ? (pluginVersionById.get(node.pluginId) ?? null)
+            : null,
+      // A plugin node's own name equals the colliding label, so it is no distinguisher (null); a
+      // contained node is distinguished by WHICH plugin ships it.
+      pluginName: node.pluginId !== null ? (pluginNameById.get(node.pluginId) ?? null) : null,
+      projectName: node.projectName,
+      sourcePhrase: plainSourcePhrase(node.source),
+    }));
+    const labels = disambiguatedLabels(labelInputs);
+
     const graphNodes: GraphNode[] = nodes.map((node) => {
       const observed =
         node.kind === 'skill'
@@ -455,7 +491,10 @@ export class AnalyticsRepository {
       const graphNode: GraphNode = {
         id: `n${String(node.id)}`,
         kind: node.kind,
-        label: node.name,
+        // §6.7 / §1a — bare `name` when unique in the graph, qualified plainly on collision.
+        label: labels.get(node.id) ?? node.name,
+        // Colour still keys on the bare `name`: a plugin's two versions are the same skill and
+        // should read as one colour, and colour is not the disambiguator — the label is.
         colorIndex: colorIndexFor(node.name),
         metrics: { sizeBytes: node.sizeBytes, observed },
         meta,

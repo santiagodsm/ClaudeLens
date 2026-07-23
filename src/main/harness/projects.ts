@@ -246,6 +246,8 @@ export async function scanProjectHarness(
     projectId,
     enabled: null,
     entryCount: null,
+    // Migration 0010 — a project's own harness carries no plugin, so no plugin version.
+    version: null,
   } as const;
 
   const push = (node: HarnessNodeInput): string => {
@@ -272,6 +274,7 @@ export async function scanProjectHarness(
       mtimeMs: null,
       enabled: null,
       entryCount: null,
+      version: null, // Migration 0010 — a builtin tool has no plugin version.
     });
     toolKeys.set(name, key);
     return key;

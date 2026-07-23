@@ -1229,6 +1229,35 @@ observed in an `Agent` tool call"); before ADR-039 it had no implementation and 
 reported `0`. `skill` and `agent` nodes join `source = 'transcript'` alongside `tool` nodes, so the
 Map is populated even when no configuration file exists anywhere.
 
+⚠️ **AMENDED 2026-07-23 — `version`, and the label the Harness Map draws (§6.7 / §1a).**
+
+```sql
+ALTER TABLE harness_nodes ADD COLUMN version TEXT;   -- 0010-harness-node-version.sql
+```
+
+Node identity is `(kind, name, source, rel_path, project_id)` (`uq_harness_nodes`, above), so two
+on-disk entities that legitimately share a `name:` are two DISTINCT nodes. The concrete case: a
+plugin cache holds two **versions** of one plugin side by side, each shipping a skill whose
+frontmatter `name` is the same. Both are correct, distinct vertices — this is **not** a dedup, and
+dropping one would be wrong, because two *different* plugins may also ship a same-named skill and
+that must keep working. But `harnessGraph()` (§4.5) drew each node with `label = name`, so the two
+rendered as two **identical** labels the user could not tell apart.
+
+The fix disambiguates the **label**, never the node set. `version` is the plugin manifest's own
+`version`, read by the scanner from `plugin.json` / `marketplace.json` (the robust source — a skill
+directory may sit several levels below `plugin.json`, so a path segment is not) and stored on the
+plugin / marketplace node; `NULL` for every other node and for a manifest that declares none, and
+never read as a version of `0`. `harnessGraph()` reads it — directly for a plugin node, via
+`plugin_id` for the skills a plugin contains — and qualifies **only** the labels that actually
+collide, with a **plain** distinguisher: `setup-project (0.4.0)` vs `setup-project (0.5.0)`. A
+unique label keeps its bare name (§1a: suffixing everything trades ambiguity for clutter). When a
+version does not separate a colliding pair — two *different* plugins, or a project-level collision —
+the qualifier falls back through the plugin name, the project name, then plain words for the
+node's source, in that order; it is never an internal identifier, a `source` enum value, a
+`rel_path` or a key (§1a). `version` is **not** part of node identity — two plugin versions already
+differ by `rel_path` — so `uq_harness_nodes` is unchanged. The rule lives in
+`src/main/db/repositories/harness-labels.ts`; golden cases in `test/metrics/harness-node-label.test.ts`.
+
 ## §3.11 `price_rows` — USER — bi-temporal, five token classes
 
 ⚠️ **This is the schema's trickiest part and squarely in silently-wrong-number territory.**

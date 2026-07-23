@@ -1,0 +1,36 @@
+-- 0010 — `harness_nodes.version`
+--
+-- ⚠️ A NEW numbered file, never an edit to 0001–0009: merged migration files are IMMUTABLE
+-- (STACK ADR-007, §3.18). Editing a shipped file leaves already-migrated databases silently
+-- divergent from new ones.
+--
+-- WHY THIS COLUMN EXISTS (§6.7 / §1a — the Harness Map label, and the no-jargon directive):
+--
+--   Node identity is `(kind, name, source, rel_path, project_id)` (§3.10 `uq_harness_nodes`,
+--   ADR-039). A plugin cache can legitimately hold TWO versions of the same plugin side by side —
+--   each shipping a skill with the same frontmatter `name` — so both survive as genuinely distinct
+--   nodes (correct: two different plugins may also ship a same-named skill, and that must keep
+--   working). But the Harness Map draws each with `label = name`, so the two render IDENTICALLY and
+--   the user cannot tell which is which. This is NOT a dedup bug; the fix is to DISAMBIGUATE THE
+--   LABEL on collision, never to drop a node.
+--
+--   The natural, always-available, jargon-free distinguisher for a plugin's nodes is the plugin's
+--   own **version** — `setup-project (0.4.0)` vs `setup-project (0.5.0)`. `plugin.json` carries it
+--   in a `version` field; the scanner reads it there (the robust source — a skill directory may sit
+--   several levels below `plugin.json`, so a path segment is not) and lands it on the plugin /
+--   marketplace node. `harnessGraph()` (§4.5) reads it back at query time to qualify ONLY the
+--   labels that actually collide (CLAUDE.md §1a: a unique label keeps its bare name — suffixing
+--   everything trades ambiguity for clutter). The value shown is a plain version string; no
+--   internal identifier reaches the screen.
+--
+--   `NULL` means "no declared version", the honest value for every node that is not a plugin or a
+--   marketplace, and for a manifest that declares none. It is never read as a version of `0`.
+--
+-- The `version` is NOT part of node identity: two versions of a plugin already differ by `rel_path`
+-- (their cache directories differ), so they are already distinct rows. `uq_harness_nodes` is
+-- untouched, and no index changes.
+--
+-- This is additive DDL only: no row is deleted, no fact table is touched, `price_rows`, `settings`,
+-- `audit_log` and `archives` are not named (INV-12, §12.2 `db-migration-review`).
+
+ALTER TABLE harness_nodes ADD COLUMN version TEXT;
