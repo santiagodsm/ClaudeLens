@@ -1,0 +1,2 @@
+{"type":"user","uuid":"sc-d1","timestamp":"2024-06-01T10:05:00.000Z","cwd":"/work/demo/orch","message":{"role":"user","content":"no sidecar, no chain"}}
+{"type":"assistant","uuid":"sc-d2","parentUuid":"sc-d1","timestamp":"2024-06-01T10:05:20.000Z","cwd":"/work/demo/orch","message":{"role":"assistant","model":"claude-test-1","usage":{"input_tokens":20,"output_tokens":7,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"tool_use","id":"toolu_sc_d2","name":"Bash","input":{"command":"echo dark"}}]}}

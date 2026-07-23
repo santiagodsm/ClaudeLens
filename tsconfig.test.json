@@ -1,0 +1,39 @@
+{
+  "//": "test/** — the three Vitest projects (STACK ADR-012) and the isolation helpers (ADR-013). Deliberately does NOT include `e2e/**`: Playwright's global `expect` and Vitest's global `expect` collide, so E2E gets `e2e/tsconfig.json` (STACK ADR-018).",
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": ["node"],
+    "jsx": "react-jsx",
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitReturns": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+
+    "composite": true,
+    "declaration": true,
+    "declarationMap": true,
+    "emitDeclarationOnly": true,
+    "rootDir": ".",
+    "outDir": "out/tsc/test",
+    "tsBuildInfoFile": "out/tsc/test.tsbuildinfo"
+  },
+  "include": ["test/**/*.ts", "test/**/*.tsx"],
+  "references": [
+    { "path": "./tsconfig.shared.json" },
+    { "path": "./tsconfig.main.json" },
+    { "path": "./tsconfig.preload.json" },
+    { "path": "./tsconfig.renderer.json" }
+  ]
+}

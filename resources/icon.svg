@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-label="Claude Lens">
+  <title>Claude Lens</title>
+  <!--
+    Source artwork for the macOS launcher icon (DESIGN.md ADR-038).
+    Rasterised by scripts/make-launcher.mjs via `sips` into an .iconset, then `iconutil`.
+
+    Every colour here is a DESIGN.md 6.1 / FRONTEND.md 2 token value, verbatim:
+      #0B0D12                bg-app     the app surface the mark sits on
+      #7C5CFF                accent     violet, gradient start
+      #22D3EE                accent-2   cyan, gradient end
+      rgba(124,92,255,0.45)  glow
+    The gradient runs at 135deg to match the grad-violet-cyan token.
+
+    NOTE for editors: XML forbids a double hyphen inside a comment, so token names are
+    written here without their CSS custom-property prefix. `sips` rejects the whole file
+    if that rule is broken.
+
+    Legibility budget, checked against real 16 px renders rather than assumed. At 16 px
+    (Dock) one unit is 1/64 px, so the mark is sized so that four bands survive:
+      pupil     radius  96 units = 1.50 px
+      blades    to 200           = 1.63 px band
+      dark gap  to 280           = 1.25 px band   <- what makes it read as a lens
+      barrel    to 356           = 1.19 px stroke
+    Two earlier drafts failed here and the failures are worth recording: a 30-unit gap
+    (0.47 px) fused the barrel into the blades, and letting the glow show *inside* the
+    barrel lit the dark gap band violet and did the same thing a second way. The glow is
+    therefore an outer halo only, occluded by an opaque disc at r=280. The six blade
+    separators are 16 units = 0.25 px and are meant to vanish at 16 px: the mark degrades
+    to barrel + disc + dark pupil, and reads as a full aperture from 32 px up.
+  -->
+  <defs>
+    <!-- grad-violet-cyan: linear-gradient(135deg, #7C5CFF 0%, #22D3EE 100%).
+         userSpaceOnUse so the barrel and the blades share one continuous gradient field. -->
+    <linearGradient id="lens" gradientUnits="userSpaceOnUse" x1="180" y1="180" x2="844" y2="844">
+      <stop offset="0" stop-color="#7C5CFF" />
+      <stop offset="1" stop-color="#22D3EE" />
+    </linearGradient>
+    <!-- glow: 0 0 24px rgba(124,92,255,0.45) -->
+    <radialGradient id="glow" gradientUnits="userSpaceOnUse" cx="512" cy="512" r="470">
+      <stop offset="0.60" stop-color="#7C5CFF" stop-opacity="0.45" />
+      <stop offset="0.78" stop-color="#7C5CFF" stop-opacity="0.28" />
+      <stop offset="1" stop-color="#7C5CFF" stop-opacity="0" />
+    </radialGradient>
+    <clipPath id="surface">
+      <rect x="100" y="100" width="824" height="824" rx="185" ry="185" />
+    </clipPath>
+  </defs>
+
+  <!-- The app surface. 824/1024 with a 185 corner radius is the macOS icon grid. -->
+  <rect x="100" y="100" width="824" height="824" rx="185" ry="185" fill="#0B0D12" />
+
+  <g clip-path="url(#surface)">
+    <circle cx="512" cy="512" r="470" fill="url(#glow)" />
+    <!-- Opaque, so everything inside the barrel is full-contrast against the gradient.
+         The glow survives only as the halo outside it. -->
+    <circle cx="512" cy="512" r="280" fill="#0B0D12" />
+  </g>
+
+  <!-- The blades: the annulus between r=200 and the hexagonal opening (even-odd).
+       The hole left by the even-odd rule is the aperture. -->
+  <path
+    fill-rule="evenodd"
+    fill="url(#lens)"
+    d="M 312 512 A 200 200 0 1 0 712 512 A 200 200 0 1 0 312 512 Z
+       M 512 416 L 595.14 464 L 595.14 560 L 512 608 L 428.86 560 L 428.86 464 Z"
+  />
+
+  <!-- Blade separators: each hexagon side extended past its vertex to the blade circle.
+       This is what makes it an aperture rather than a doughnut. -->
+  <g stroke="#0B0D12" stroke-width="16" stroke-linecap="butt" fill="none">
+    <path d="M 595.14 464 L 711.10 530.95" />
+    <path d="M 595.14 560 L 595.14 693.90" />
+    <path d="M 512 608 L 396.04 674.95" />
+    <path d="M 428.86 560 L 312.90 493.05" />
+    <path d="M 428.86 464 L 428.86 330.10" />
+    <path d="M 512 416 L 627.96 349.05" />
+  </g>
+
+  <!-- The barrel. -->
+  <circle cx="512" cy="512" r="318" fill="none" stroke="url(#lens)" stroke-width="76" />
+</svg>

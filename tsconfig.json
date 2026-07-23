@@ -1,0 +1,11 @@
+{
+  "//": "Solution file. References only — `npm run typecheck` is `tsc --build --force` over this. STACK ADR-001, check-command table row `typecheck`. `e2e/tsconfig.json` is deliberately NOT referenced here: Playwright's and Vitest's global `expect` types collide (STACK ADR-018), and `e2e` is not part of `npm run check`.",
+  "files": [],
+  "references": [
+    { "path": "./tsconfig.shared.json" },
+    { "path": "./tsconfig.preload.json" },
+    { "path": "./tsconfig.main.json" },
+    { "path": "./tsconfig.renderer.json" },
+    { "path": "./tsconfig.test.json" }
+  ]
+}

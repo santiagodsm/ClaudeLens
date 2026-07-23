@@ -1,0 +1,1 @@
+{"type":"assistant","uuid":"m14-u1","timestamp":"2024-05-01T09:10:00.000Z","message":{"role":"assistant","model":"claude-test-1","usage":{"input_tokens":1,"output_tokens":1,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"tool_use","id":"m14-u1-tu","name":"Bash","input":{"command":"echo unlinked"}}]}}

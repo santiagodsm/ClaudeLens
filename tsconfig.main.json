@@ -1,0 +1,33 @@
+{
+  "//": "src/main — Electron main process: fs, SQLite, watcher, actions, pricing, IPC handlers (CLAUDE.md §5). Node types, no DOM.",
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": ["node"],
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitReturns": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+
+    "composite": true,
+    "declaration": true,
+    "declarationMap": true,
+    "emitDeclarationOnly": true,
+    "rootDir": "src/main",
+    "outDir": "out/tsc/main",
+    "tsBuildInfoFile": "out/tsc/main.tsbuildinfo"
+  },
+  "include": ["src/main/**/*.ts"],
+  "references": [{ "path": "./tsconfig.shared.json" }]
+}

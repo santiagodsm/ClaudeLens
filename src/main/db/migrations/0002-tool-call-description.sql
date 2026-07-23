@@ -1,0 +1,31 @@
+-- =====================================================================================
+-- Migration 0002 — `tool_calls.description`.
+--
+-- DESIGN §3.7 says `subagent_runs.description` comes "from the spawning `Agent` tool
+-- call, when linked", and §5.4 rule 9 already extracts it ("For `Agent`, `subagent_type`
+-- and `description` come from `input`"). But §3.6's `tool_calls` DDL declared no
+-- `description` column, so the extracted value had nowhere to land and
+-- `subagent_runs.description` was deterministically NULL — a column two other sections
+-- promise to render (§4.5 `SessionDetail.subagentRuns[].description`, §6.5's drill-down).
+--
+-- ⚠️ Ruling A-09 (2026-07-22): ADD THE COLUMN, and do it here rather than in `0001`.
+-- Merged migration files are IMMUTABLE (STACK ADR-007, §3.18) and `0001-initial.sql` is
+-- committed; editing it would leave every already-migrated database silently divergent
+-- from a freshly-created one. §3.6's DDL block in DESIGN.md is amended in step with this
+-- file so `db-migration-review` (§12.2) still diffs the two successfully.
+--
+-- Filling the value opportunistically from whatever happened to be in the same parse pass
+-- was rejected: it would make the column depend on file order, which INV-04 forbids.
+-- `subagent_runs.description` is instead recomputed at FINALIZING from the linked spawn
+-- tool call, over current table contents, exactly like every other cross-file value.
+--
+-- `PRAGMA user_version` is set by the runner (src/main/db/migrate.ts), not here, so that
+-- the version bump and the DDL commit or roll back as one unit.
+--
+-- ADD COLUMN is the whole change: SQLite rewrites no rows, existing rows read NULL, and
+-- nothing is dropped or rebuilt (§9.6, ADR-026).
+-- =====================================================================================
+
+-- §3.6 — `tool_name='Agent'` -> input.description. NULL for every other tool, and NULL on
+-- rows written before this migration until the next sync re-ingests them.
+ALTER TABLE tool_calls ADD COLUMN description TEXT;

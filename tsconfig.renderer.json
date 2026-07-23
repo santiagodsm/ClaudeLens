@@ -1,0 +1,34 @@
+{
+  "//": "src/renderer — React 19 (STACK ADR-004). `\"types\": []` omits @types/node on purpose: the query seam (ADR-008, INV-16) means the renderer has no filesystem, no database and no network vocabulary, so `node:fs` should not even type-check here. ESLint enforces the same boundary; this is the second belt.",
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": [],
+    "jsx": "react-jsx",
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitReturns": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": false,
+
+    "composite": true,
+    "declaration": true,
+    "declarationMap": true,
+    "emitDeclarationOnly": true,
+    "rootDir": "src/renderer",
+    "outDir": "out/tsc/renderer",
+    "tsBuildInfoFile": "out/tsc/renderer.tsbuildinfo"
+  },
+  "include": ["src/renderer/**/*.ts", "src/renderer/**/*.tsx"],
+  "references": [{ "path": "./tsconfig.shared.json" }]
+}

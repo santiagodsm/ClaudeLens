@@ -1,0 +1,6 @@
+{"type":"assistant","uuid":"t1","timestamp":"2024-05-01T09:00:00.000Z","message":{"role":"assistant","model":"claude-test-1","usage":{"output_tokens":1}}}
+{"type":"assistant","uuid":"t2","timestamp":"2024-05-01T09:00:00Z","message":{"role":"assistant","model":"claude-test-1","usage":{"output_tokens":2}}}
+{"type":"assistant","uuid":"t3","timestamp":"2024-05-01T11:00:00+02:00","message":{"role":"assistant","model":"claude-test-1","usage":{"output_tokens":3}}}
+{"type":"assistant","uuid":"t4","timestamp":1714554000000,"message":{"role":"assistant","model":"claude-test-1","usage":{"output_tokens":4}}}
+{"type":"assistant","uuid":"t5","message":{"role":"assistant","model":"claude-test-1","usage":{"output_tokens":5}}}
+{"type":"assistant","uuid":"t6","timestamp":"not a date at all","message":{"role":"assistant","model":"claude-test-1","usage":{"output_tokens":6}}}

@@ -1,0 +1,31 @@
+-- 0003 — `harness_nodes.entry_count`
+--
+-- ⚠️ A NEW numbered file, never an edit to 0001 or 0002: merged migration files are IMMUTABLE
+-- (STACK ADR-007, §3.18). Editing a shipped file leaves already-migrated databases silently
+-- divergent from new ones.
+--
+-- WHY THIS COLUMN EXISTS (E10, 2026-07-22 — reported as a design gap, not a silent choice):
+--
+--   §6.9 specifies the memory browser as "every `MEMORY.md`, its project, size, entry count and
+--   staleness", and §4.5 types `q:memories` with `entryCount: number`. But **§3.10's
+--   `harness_nodes` DDL has no such column**, §3.2's `file_manifest` has none, and no §5.9 metric
+--   defines what an "entry" of a `MEMORY.md` is. `src/main/db/repositories/harness-manager.ts`
+--   (E6) recorded the gap and returned `0` **only** because no memory node existed yet, noting
+--   that the moment E10 inserted one that `0` would become a fabricated number — which
+--   CLAUDE.md §1 rates as the worst possible outcome.
+--
+--   E10 therefore adds the column, and the counting rule is now **§5.9 M-21** — where every other
+--   metric in this project is defined, exactly once (CLAUDE.md §1). An "entry count" defined only
+--   in a scanner is how a metric drifts. `src/main/harness/scan.ts` `entryCountOf()` is the one
+--   implementation of M-21 and §6.9's column renders the definition beside the number.
+--
+--   ⚠️⚠️ M-21 is the ONLY §5.9 row that originated in this build rather than in a verified source
+--   or a user decision. §3.10 and §5.9 both say so. It has never been user-confirmed.
+--
+--   NULL means "not counted", which is the honest value for every node kind that is not a
+--   memory. It is never read as zero.
+--
+-- This is additive DDL only: no row is deleted, no fact table is touched, `price_rows`,
+-- `settings`, `audit_log` and `archives` are not named (INV-12, §12.2 `db-migration-review`).
+
+ALTER TABLE harness_nodes ADD COLUMN entry_count INTEGER;

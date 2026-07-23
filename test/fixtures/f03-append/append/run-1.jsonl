@@ -1,0 +1,1 @@
+{"type":"assistant","uuid":"s3","parentUuid":"s2","timestamp":"2024-05-01T09:16:00.000Z","isSidechain":true,"message":{"role":"assistant","model":"claude-test-1","usage":{"input_tokens":2,"output_tokens":3},"content":[]}}

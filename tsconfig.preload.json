@@ -1,0 +1,32 @@
+{
+  "//": "src/preload — the contextBridge surface and nothing else (STACK ADR-003). Runs with `sandbox: true`, so it is bundled to CJS by electron-vite.",
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023", "DOM"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": ["node"],
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitReturns": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+
+    "composite": true,
+    "declaration": true,
+    "declarationMap": true,
+    "emitDeclarationOnly": true,
+    "rootDir": "src/preload",
+    "outDir": "out/tsc/preload",
+    "tsBuildInfoFile": "out/tsc/preload.tsbuildinfo"
+  },
+  "include": ["src/preload/**/*.ts"],
+  "references": [{ "path": "./tsconfig.shared.json" }]
+}

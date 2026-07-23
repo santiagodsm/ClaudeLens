@@ -1,0 +1,26 @@
+node_modules
+out
+dist
+coverage
+test-results
+playwright-report
+package-lock.json
+
+# Markdown is hand-authored contract text (PRD/STACK/DESIGN/PLAN/PROGRESS/CLAUDE).
+# Its tables are aligned by hand and reflowing them produces enormous, meaningless
+# diffs in the documents `docs-sync` gates. Formatting is not the gate here; content is.
+*.md
+
+# The design prototype export, kept verbatim as a reference artifact.
+/*.html
+
+# Fixtures are byte-exact inputs (STACK ADR-013): reformatting one silently changes
+# what a golden fixture asserts against.
+test/fixtures
+
+# DESIGN §6.1: "The token values below are binding verbatim." Prettier lowercases hex
+# literals (#0B0D12 -> #0b0d12), which makes the file no longer byte-identical to the
+# design contract that `docs-sync` diffs it against. Same colour, different text — and
+# `verbatim` is the word the contract uses. This is the one file where formatting is a
+# content decision, so Prettier does not touch it.
+src/renderer/styles/tokens.css

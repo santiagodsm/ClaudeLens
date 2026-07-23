@@ -1,0 +1,2 @@
+{"type":"assistant","uuid":"a4","parentUuid":"a3","timestamp":"2024-05-01T09:15:00.000Z","cwd":"/work/demo/alpha","gitBranch":"main","version":"1.2.5","message":{"role":"assistant","model":"claude-test-1","usage":{"input_tokens":11,"output_tokens":13},"content":[{"type":"tool_use","id":"tu4","name":"Edit","input":{"file_path":"/work/demo/alpha/src/b.py"}}]}}
+{"type":"user","uuid":"a5","parentUuid":"a4","timestamp":"2024-05-01T09:20:00.000Z","cwd":"/work/demo/alpha","message":{"role":"user","content":[{"type":"text","text":"thanks"}]}}

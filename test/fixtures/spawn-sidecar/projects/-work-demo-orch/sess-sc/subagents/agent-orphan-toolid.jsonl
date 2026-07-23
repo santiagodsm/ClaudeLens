@@ -1,0 +1,2 @@
+{"type":"user","uuid":"sc-o1","timestamp":"2024-06-01T10:03:00.000Z","cwd":"/work/demo/orch","message":{"role":"user","content":"a run whose spawning call is not in this dataset"}}
+{"type":"assistant","uuid":"sc-o2","parentUuid":"sc-o1","timestamp":"2024-06-01T10:03:15.000Z","cwd":"/work/demo/orch","message":{"role":"assistant","model":"claude-test-1","usage":{"input_tokens":20,"output_tokens":7,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"tool_use","id":"toolu_sc_o2","name":"Bash","input":{"command":"echo orphan"}}]}}

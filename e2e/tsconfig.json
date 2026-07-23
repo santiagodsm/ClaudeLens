@@ -1,0 +1,25 @@
+{
+  "//": "STACK ADR-018. E2E lives outside the Vitest tsconfig and outside the solution build, because Playwright's global `expect` and Vitest's global `expect` collide when both are in one program. `npm run e2e` is NOT part of `npm run check` and must never be added to it. E12 lands `playwright.config.ts`, `support/launch.ts` and the per-view specs here.",
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": ["node"],
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitReturns": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+
+    "noEmit": true
+  },
+  "include": ["**/*.ts"]
+}

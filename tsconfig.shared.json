@@ -1,0 +1,31 @@
+{
+  "//": "src/shared — the one channel map, taxonomies and pure functions both processes compile against (STACK ADR-003, DESIGN ADR-031). No DOM, no node types: anything importable from BOTH main and renderer must be environment-free.",
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": [],
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitReturns": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+
+    "composite": true,
+    "declaration": true,
+    "declarationMap": true,
+    "emitDeclarationOnly": true,
+    "rootDir": "src/shared",
+    "outDir": "out/tsc/shared",
+    "tsBuildInfoFile": "out/tsc/shared.tsbuildinfo"
+  },
+  "include": ["src/shared/**/*.ts"]
+}

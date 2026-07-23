@@ -1,0 +1,1 @@
+{"type":"assistant","uuid":"f11-s1","timestamp":"2024-05-01T14:35:00.000Z","message":{"role":"assistant","model":"claude-test-1","usage":{"input_tokens":0,"output_tokens":1,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}

@@ -1,0 +1,2 @@
+{"type":"user","uuid":"sc-w1","timestamp":"2024-06-01T10:04:00.000Z","cwd":"/work/demo/orch","message":{"role":"user","content":"a workflow step"}}
+{"type":"assistant","uuid":"sc-w2","parentUuid":"sc-w1","timestamp":"2024-06-01T10:04:40.000Z","cwd":"/work/demo/orch","message":{"role":"assistant","model":"claude-test-1","usage":{"input_tokens":20,"output_tokens":7,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"tool_use","id":"toolu_sc_w2","name":"Read","input":{"file_path":"src/flow.ts"}}]}}

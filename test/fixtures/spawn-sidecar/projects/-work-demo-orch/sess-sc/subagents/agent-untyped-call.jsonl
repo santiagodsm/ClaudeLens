@@ -1,0 +1,2 @@
+{"type":"user","uuid":"sc-e1","timestamp":"2024-06-01T10:01:20.000Z","cwd":"/work/demo/orch","message":{"role":"user","content":"explore the repo"}}
+{"type":"assistant","uuid":"sc-e2","parentUuid":"sc-e1","timestamp":"2024-06-01T10:02:10.000Z","cwd":"/work/demo/orch","message":{"role":"assistant","model":"claude-test-1","usage":{"input_tokens":20,"output_tokens":7,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"tool_use","id":"toolu_sc_e2","name":"Grep","input":{"pattern":"widget"}}]}}

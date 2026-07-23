@@ -1,0 +1,339 @@
+/*
+ * The token layer — DESIGN §6.1, FRONTEND §2–§4. Values are binding verbatim.
+ *
+ * ⚠️ This is the ONLY file in the repository allowed a raw hex/rgb/hsl literal or a raw px
+ * value. Everything else reads these custom properties or a Tailwind token; ESLint's
+ * `design-token-lint` rules enforce that across src/renderer/** (STACK ADR-015, §6.1).
+ *
+ * Tailwind 4 is CSS-first: there is no `tailwind.config.js` (STACK ADR-004). FRONTEND §2's
+ * `theme.extend.colors` note is a v3 idiom — the mechanism changed, the values did not.
+ *
+ * Fonts are bundled locally as woff2 by E7. The prototype's Google Fonts <link> is a remote
+ * asset fetch and would violate the single-egress rule (INV-15, §7.5); it is not carried over.
+ */
+
+@import 'tailwindcss';
+
+:root,
+:root[data-theme='dark'] {
+  --bg-app: #0B0D12;
+  --bg-surface: #12151C;
+  --bg-surface-2: #1A1F2B;
+  --border: #232936;
+  --text-primary: #F2F4F8;
+  --text-muted: #9AA4B2;
+  /* ⚠️ AMENDED 2026-07-22 (A-06) — was #5B6472, which cleared 4.5:1 on NO dark surface
+     (best 3.25:1 on --bg-app, 2.75:1 on --bg-surface-2) and so failed P-29 for the micro
+     captions it colours. Raised to the minimum that clears 4.5:1 on all three dark surfaces
+     (worst 4.60:1 on --bg-surface-2). The one dark-theme value this amendment changes; §6.1. */
+  --text-faint: #7E8898;
+  --accent: #7C5CFF;
+  --accent-2: #22D3EE;
+  --accent-3: #F471B5;
+  --ok: #34D399;
+  --warn: #FBBF24;
+  --danger: #F87171;
+  --info: #60A5FA;
+  --glow: 0 0 24px rgba(124, 92, 255, 0.45);
+  --shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+
+  /* Elevation, dark (FRONTEND §4): "flat borders + soft shadow on dark
+     (0 1px 0 rgba(255,255,255,0.03) inset + 0 8px 24px rgba(0,0,0,0.4))". */
+  --elev-inset: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  /* "on hover, raise to --bg-surface-2 and add a faint accent ring" (FRONTEND §4). */
+  --ring-accent: 0 0 0 1px rgba(124, 92, 255, 0.35);
+  /* Zebra "via --bg-surface-2 at low alpha" (FRONTEND §5) and the row-hover tint. */
+  --tint-zebra: rgba(255, 255, 255, 0.025);
+  --tint-hover: rgba(124, 92, 255, 0.07);
+  /* Sequential single-hue ramp for HeatmapCell (FRONTEND §5) — violet, five stops.
+     §6.3's activity calendar is the "violet sequential" one. */
+  --seq-0: rgba(124, 92, 255, 0.06);
+  --seq-1: rgba(124, 92, 255, 0.22);
+  --seq-2: rgba(124, 92, 255, 0.42);
+  --seq-3: rgba(124, 92, 255, 0.66);
+  --seq-4: rgba(124, 92, 255, 0.92);
+  /* §6.5's rhythm heatmap is specified as "cyan sequential" — a second single-hue ramp, not a
+     second meaning. Added by E8 because §6.5 names the hue explicitly and the violet ramp
+     would render the wrong chart. */
+  --seq-cyan-0: rgba(34, 211, 238, 0.06);
+  --seq-cyan-1: rgba(34, 211, 238, 0.22);
+  --seq-cyan-2: rgba(34, 211, 238, 0.42);
+  --seq-cyan-3: rgba(34, 211, 238, 0.66);
+  --seq-cyan-4: rgba(34, 211, 238, 0.92);
+  /* Partial-data hatching (§6.12) — the value is suppressed, never zeroed; the hatch marks
+     the region. Two-colour repeating gradient so it reads without relying on hue. */
+  --hatch: repeating-linear-gradient(
+    45deg,
+    rgba(154, 164, 178, 0.18) 0 6px,
+    rgba(154, 164, 178, 0) 6px 12px
+  );
+}
+
+:root[data-theme='light'] {
+  --bg-app: #F7F8FA;
+  --bg-surface: #FFFFFF;
+  --bg-surface-2: #F0F2F6;
+  --border: #E2E6EC;
+  --text-primary: #0E1116;
+  --text-muted: #55606E;
+  /* ⚠️ AMENDED 2026-07-22 (A-06) — was #8A94A3, which cleared 4.5:1 on NO light surface
+     (best 2.74:1) and so failed P-29 for the micro captions it colours. Darkened to the
+     minimum that clears 4.5:1 on all three light surfaces (worst 4.61:1 on #FFFFFF). §6.1. */
+  --text-faint: #636E7E;
+  /* ⚠️ AMENDED 2026-07-22 (A-06) — light-theme darkenings of the accent + semantic hues.
+     §6.1 declared these IDENTICALLY in both theme blocks, but they were tuned against the
+     near-black dark surfaces and fell below 3:1 on #FFFFFF (amber 1.67:1, cyan 1.81:1,
+     --danger 2.77:1, …). Only --accent (violet, 3.88:1 worst) already passed and is left
+     as-is. Each override keeps the SAME hue (H unchanged; --c8 lilac shifts 4°) and now
+     clears 3:1 on all three light surfaces. Dark theme is unchanged. Ratios in the header
+     block below and in test/renderer/contrast.test.ts. */
+  --accent: #7C5CFF;
+  --accent-2: #0D94A8; /* cyan, darkened — was #22D3EE (1.81:1 on white) → 3.22:1 worst */
+  --accent-3: #F03D9A; /* pink, darkened — was #F471B5 (2.67:1) → 3.21:1 worst */
+  --ok: #21996D; /* emerald, darkened — was #34D399 (1.92:1) → 3.21:1 worst */
+  --warn: #AE7E03; /* amber, darkened — was #FBBF24 (1.67:1) → 3.24:1 worst */
+  --danger: #F64444; /* red, darkened — was #F87171 (2.77:1) → 3.21:1 worst */
+  --info: #2885F8; /* blue, darkened — was #60A5FA (2.54:1) → 3.23:1 worst */
+  --glow: 0 0 24px rgba(124, 92, 255, 0.45);
+  --shadow: 0 8px 24px rgba(20, 30, 60, 0.08);
+
+  /* ⚠️ AMENDED 2026-07-22 (A-06) — light-theme categorical ramp. The ramp is declared once
+     under the bare `:root` below (dark-tuned); these override it for LIGHT only, exactly as
+     the accent/semantic hues above. Index→series mapping is UNCHANGED — a series is hue #3 in
+     both themes; #3 is simply darker in light. Only the rendered value differs per theme, so
+     the stable-hue-per-series contract (§3.3, FRONTEND §2) is preserved and nothing keys off
+     the literal hex. Each keeps its hue family; min pairwise ΔE is 27.1, matching the dark
+     ramp's own closest pair (c5/c7, 27.2). --c1 (violet) already passed and is left as-is. */
+  --c1: #7C5CFF; /* violet — unchanged (3.88:1 worst on light) */
+  --c2: #0D94A8; /* cyan   — was #22D3EE → 3.22:1 worst */
+  --c3: #21996D; /* emerald— was #34D399 → 3.21:1 worst */
+  --c4: #2885F8; /* blue   — was #60A5FA → 3.23:1 worst */
+  --c5: #F03D9A; /* pink   — was #F471B5 → 3.21:1 worst */
+  --c6: #AE7E03; /* amber  — was #FBBF24 → 3.24:1 worst */
+  --c7: #FA3C58; /* rose   — was #FB7185 → 3.20:1 worst */
+  --c8: #9873E7; /* lilac  — was #A78BFA → 3.15:1 worst (H 255→259, still lilac) */
+
+  /* Light-theme elevation: an inset white highlight is invisible on white, so the light
+     theme leans on the border instead (FRONTEND §1 "design in dark, verify light"). */
+  --elev-inset: inset 0 1px 0 rgba(20, 30, 60, 0.02);
+  --ring-accent: 0 0 0 1px rgba(124, 92, 255, 0.3);
+  --tint-zebra: rgba(20, 30, 60, 0.025);
+  --tint-hover: rgba(124, 92, 255, 0.06);
+  --seq-0: rgba(124, 92, 255, 0.06);
+  --seq-1: rgba(124, 92, 255, 0.2);
+  --seq-2: rgba(124, 92, 255, 0.4);
+  --seq-3: rgba(124, 92, 255, 0.64);
+  --seq-4: rgba(124, 92, 255, 0.9);
+  --seq-cyan-0: rgba(34, 211, 238, 0.08);
+  --seq-cyan-1: rgba(34, 211, 238, 0.24);
+  --seq-cyan-2: rgba(34, 211, 238, 0.44);
+  --seq-cyan-3: rgba(34, 211, 238, 0.68);
+  --seq-cyan-4: rgba(34, 211, 238, 0.94);
+  --hatch: repeating-linear-gradient(
+    45deg,
+    rgba(85, 96, 110, 0.16) 0 6px,
+    rgba(85, 96, 110, 0) 6px 12px
+  );
+}
+
+:root {
+  /* Categorical ramp — index 0..7, assigned by FNV1a32(name) mod 8 (§3.3). Order matters.
+     Semantic colours (--ok/--warn/--danger/--info) are reserved and kept OUT of this rotation. */
+  --c1: #7C5CFF; /* violet */
+  --c2: #22D3EE; /* cyan */
+  --c3: #34D399; /* emerald */
+  --c4: #60A5FA; /* blue */
+  --c5: #F471B5; /* pink */
+  --c6: #FBBF24; /* amber */
+  --c7: #FB7185; /* rose */
+  --c8: #A78BFA; /* lilac */
+
+  /* Gradients */
+  --grad-violet-cyan: linear-gradient(135deg, #7C5CFF 0%, #22D3EE 100%);
+  --grad-pink-violet: linear-gradient(135deg, #F471B5 0%, #7C5CFF 100%);
+
+  /* Spacing scale (px): 4 8 12 16 24 32 48 */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+
+  /* Radius: cards 16, controls 10, pills 999 */
+  --radius-card: 16px;
+  --radius-control: 10px;
+  --radius-pill: 999px;
+
+  /* Type scale (rem): display 2.5 / h1 2 / h2 1.5 / h3 1.25 / body 0.95 / small 0.8125 / micro 0.6875 */
+  --text-display: 2.5rem;
+  --text-h1: 2rem;
+  --text-h2: 1.5rem;
+  --text-h3: 1.25rem;
+  --text-body: 0.95rem;
+  --text-small: 0.8125rem;
+  --text-micro: 0.6875rem;
+
+  /*
+   * Fonts (§6.1): Inter for UI, JetBrains Mono for ids, paths, tokens and graph labels.
+   *
+   * ⚠️ E7 could NOT bundle the woff2 faces: obtaining them requires a network fetch, and
+   * INV-15 allows exactly one egress point (src/main/pricing/fetch-price-table.ts) — a build
+   * step that downloads a font is still a download. The prototype's Google Fonts <link> is
+   * therefore not carried over in any form. Both families are named first so a locally
+   * installed copy is used when present, and the stack degrades to system-ui / ui-monospace
+   * otherwise. Landing the faces later is purely additive: drop two .woff2 files beside this
+   * file and add two @font-face blocks here. Nothing else changes.
+   */
+  --font-ui: Inter, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
+    sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* Weight for the hero stat number (FRONTEND §3: "display size, weight 700, tabular"). */
+  --weight-hero: 700;
+  /* Micro labels above hero numbers: uppercase, letter-spacing 0.08em (FRONTEND §3). */
+  --tracking-micro: 0.08em;
+
+  /* Layout (§6.2 / FRONTEND §4). Sidebar 240, top bar 64, content max-width 1480 centred,
+     12-column grid with a 24 px gutter, 3 px violet→cyan active bar. */
+  --sidebar-w: 240px;
+  --sidebar-collapsed-w: 72px;
+  --topbar-h: 64px;
+  --content-max-w: 1480px;
+  --grid-gutter: 24px;
+  --nav-bar-w: 3px;
+  /* §6.10 — "Settings: max-width 720 px, stacked cards." */
+  --settings-max-w: 720px;
+
+  /*
+   * Motion (FRONTEND §7, §6.12). Declared as tokens so `prefers-reduced-motion` can zero
+   * them in one place and so no component invents its own timing.
+   * ⚠️ Entrance durations apply on FIRST MOUNT ONLY — a live data update never re-animates
+   * a chart, and no push event triggers a layout animation (§6.2, §1.3 moment 2).
+   */
+  --dur-hover: 120ms;
+  --dur-view: 200ms;
+  --dur-drawer: 240ms;
+  --dur-chart-in: 500ms;
+  --stagger-series: 40ms;
+  --slide-view: 8px;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/*
+ * P-31 / FRONTEND §7 — `prefers-reduced-motion: reduce` disables all non-essential
+ * animation. `:root[data-motion='full']` is the `reduceMotionOverride` escape hatch (§3.13),
+ * and it is written to win over the media query, which is the whole point of an override.
+ */
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-motion='full']) {
+    --dur-hover: 0ms;
+    --dur-view: 0ms;
+    --dur-drawer: 0ms;
+    --dur-chart-in: 0ms;
+    --stagger-series: 0ms;
+    --slide-view: 0px;
+  }
+}
+
+:root[data-motion='reduce'] {
+  --dur-hover: 0ms;
+  --dur-view: 0ms;
+  --dur-drawer: 0ms;
+  --dur-chart-in: 0ms;
+  --stagger-series: 0ms;
+  --slide-view: 0px;
+}
+
+/* Surfaced to Tailwind. `inline` because every value is a reference to a custom property
+   declared above, which is what makes the theme switch at runtime (STACK ADR-004). */
+@theme inline {
+  --color-bg-app: var(--bg-app);
+  --color-bg-surface: var(--bg-surface);
+  --color-bg-surface-2: var(--bg-surface-2);
+  --color-border: var(--border);
+  --color-text-primary: var(--text-primary);
+  --color-text-muted: var(--text-muted);
+  --color-text-faint: var(--text-faint);
+  --color-accent: var(--accent);
+  --color-accent-2: var(--accent-2);
+  --color-accent-3: var(--accent-3);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-danger: var(--danger);
+  --color-info: var(--info);
+
+  --color-c1: var(--c1);
+  --color-c2: var(--c2);
+  --color-c3: var(--c3);
+  --color-c4: var(--c4);
+  --color-c5: var(--c5);
+  --color-c6: var(--c6);
+  --color-c7: var(--c7);
+  --color-c8: var(--c8);
+
+  --radius-card: var(--radius-card);
+  --radius-control: var(--radius-control);
+  --radius-pill: var(--radius-pill);
+
+  /* Type ramp → `text-display`, `text-h1`, … utilities (FRONTEND §3). */
+  --text-display: var(--text-display);
+  --text-h1: var(--text-h1);
+  --text-h2: var(--text-h2);
+  --text-h3: var(--text-h3);
+  --text-body: var(--text-body);
+  --text-small: var(--text-small);
+  --text-micro: var(--text-micro);
+
+  /* Families → `font-ui`, `font-mono`. */
+  --font-ui: var(--font-ui);
+  --font-mono: var(--font-mono);
+
+  /* Elevation and glow → `shadow-card`, `shadow-glow`, `shadow-ring`, `shadow-inset`. */
+  --shadow-card: var(--shadow);
+  --shadow-glow: var(--glow);
+  --shadow-ring: var(--ring-accent);
+  --shadow-inset: var(--elev-inset);
+
+  /* Motion → `duration-hover`, `duration-view`, `duration-drawer`, `duration-chart`. */
+  --duration-hover: var(--dur-hover);
+  --duration-view: var(--dur-view);
+  --duration-drawer: var(--dur-drawer);
+  --duration-chart: var(--dur-chart-in);
+  --ease-out: var(--ease-out);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg-app);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: var(--text-body);
+  /* font-variant-numeric: tabular-nums on every number (§6.1). Declared once, globally,
+     so no component has to remember it and no number can escape it. */
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* P-30 — a visible focus ring on EVERY interactive element, declared once. */
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-control);
+}
+
+/* FRONTEND §3 — mono for ids, paths, tokens and graph labels. */
+code,
+kbd,
+samp,
+pre,
+.font-mono {
+  font-family: var(--font-mono);
+}

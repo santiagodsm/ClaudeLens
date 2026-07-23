@@ -1,0 +1,2 @@
+{"type":"user","uuid":"sc-l1","timestamp":"2024-06-01T10:00:05.000Z","cwd":"/work/demo/orch","message":{"role":"user","content":"implement the widget"}}
+{"type":"assistant","uuid":"sc-l2","parentUuid":"sc-l1","timestamp":"2024-06-01T10:00:30.000Z","cwd":"/work/demo/orch","message":{"role":"assistant","model":"claude-test-1","usage":{"input_tokens":20,"output_tokens":7,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"tool_use","id":"toolu_sc_l2","name":"Read","input":{"file_path":"src/widget.ts"}}]}}

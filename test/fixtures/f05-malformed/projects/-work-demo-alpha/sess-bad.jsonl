@@ -1,0 +1,5 @@
+{"type":"user","uuid":"g1","timestamp":"2024-05-01T09:00:00.000Z","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}
+{"type":"assistant","uuid":"g2","timestamp":"2024-05-01T09:0
+[1,2,3]
+{"type":"assistant","uuid":"g3","message":{"role":"assistant","model":"claude-test-1","usage":{"output_tokens":9999}}}
+{"type":"assistant","uuid":"g4","timestamp":"2024-05-01T09:05:00.000Z","message":{"role":"assistant","model":"claude-test-1","usage":{"input_tokens":3,"output_tokens":42}}}

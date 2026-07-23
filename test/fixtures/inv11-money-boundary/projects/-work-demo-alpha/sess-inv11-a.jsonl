@@ -1,0 +1,1 @@
+{"type":"assistant","uuid":"inv11-a1","timestamp":"2024-05-01T09:00:00.000Z","message":{"role":"assistant","model":"claude-costly-1","usage":{"input_tokens":400000,"output_tokens":300000,"cache_creation_input_tokens":100000,"cache_read_input_tokens":90500}}}

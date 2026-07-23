@@ -1,0 +1,2 @@
+{"type":"user","uuid":"fam1","parentUuid":null,"timestamp":"2024-05-01T09:00:00.000Z","cwd":"/work/demo/Photo-Booth","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}
+{"type":"assistant","uuid":"fam2","parentUuid":"fam1","timestamp":"2024-05-01T09:01:00.000Z","cwd":"/work/demo/Photo-Booth","message":{"role":"assistant","model":"claude-test-1","usage":{"input_tokens":10,"output_tokens":20,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"ok"}]}}
