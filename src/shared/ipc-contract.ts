@@ -569,6 +569,41 @@ export interface CacheEfficiency {
   hitRatio: number;
 }
 
+/**
+ * §4.5 `q:contextOverhead` (§6.4 — the actionable panel that replaced the cache-efficiency gauge,
+ * user directive 2026-07-22 / PROGRESS.md amendment **A-11**).
+ *
+ * ⚠️ The two totals are M-01/M-02 quantities over the current global filter: `cacheReadTokens` is
+ * the same `tok_cache_read` sum M-04 reports, `outputTokens` the same `tok_output` M-02 reports.
+ * ⚠️ **There is deliberately NO ratio field here.** A-11's `cacheReadTokens / outputTokens` is a
+ * DISPLAY ratio computed at the presentation edge (the renderer), from these two raw counts —
+ * never rounded in SQL, and left undefined (shown as "no output tokens", never `0`) when
+ * `outputTokens` is `0`. Carrying a pre-divided number would be a stored aggregate (ADR-027) and
+ * would put a `NaN`/`0` division decision on the wire where it cannot be re-checked (CLAUDE.md §1).
+ *
+ * `sessions` is the leaderboard of the heaviest sessions by cache-read tokens (cache-read DESC),
+ * so the user can see WHERE the re-read volume concentrates and act on it (compact / clear).
+ */
+export interface ContextOverhead {
+  /** M-04 cache-read sum over the filtered, non-synthetic population. */
+  cacheReadTokens: number;
+  /** M-02 output-token sum over the same population. `0` is a real measured total, not "unknown". */
+  outputTokens: number;
+  /**
+   * The heaviest sessions by cache-read tokens, most first. `key` is a stable session id for React
+   * identity ONLY and is never shown; `label` is the session's project (or group) display NAME,
+   * never a numeric id or an encoded path (§1a). `startedAt` is UTC epoch ms (ADR-021 — the
+   * renderer buckets it to a local date).
+   */
+  sessions: {
+    key: string;
+    label: string;
+    startedAt: number;
+    cacheReadTokens: number;
+    outputTokens: number;
+  }[];
+}
+
 /** §4.5 `q:costBreakdown` request grouping. */
 export type CostBreakdownBy = 'model' | 'project' | 'day';
 
@@ -1174,6 +1209,9 @@ export interface IpcChannels {
   };
   'q:tokensByProject': { req: GlobalFilter; res: TokensByProject };
   'q:cacheEfficiency': { req: GlobalFilter; res: CacheEfficiency };
+  /** §6.4 (A-11) — where cache-read volume concentrates, by session. Same request as the two
+   *  filtered token channels above; the display ratio is derived in the renderer, not here. */
+  'q:contextOverhead': { req: GlobalFilter; res: ContextOverhead };
   'q:costBreakdown': { req: GlobalFilter & { by: CostBreakdownBy }; res: CostBreakdown };
   'q:sessionHistogram': { req: GlobalFilter; res: SessionHistogram };
   'q:rhythmHeatmap': { req: GlobalFilter; res: RhythmHeatmap };

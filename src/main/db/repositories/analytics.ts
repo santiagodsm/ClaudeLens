@@ -20,7 +20,11 @@ import { GraphStatsRepository } from './graph-stats';
 import { HarnessManagerRepository } from './harness-manager';
 import { ProjectGroupsRepository } from './project-groups';
 import { ProjectStatsRepository } from './project-stats';
-import { SESSION_HISTOGRAM_BUCKETS, SessionStatsRepository } from './session-stats';
+import {
+  CONTEXT_OVERHEAD_LIMIT,
+  SESSION_HISTOGRAM_BUCKETS,
+  SessionStatsRepository,
+} from './session-stats';
 import { ToolStatsRepository } from './tool-stats';
 import { pageFrom, type QueryContext } from './scope';
 import { picoToNanoUsd, assertSafeAggregate } from '../../../shared/money';
@@ -30,6 +34,7 @@ import type {
   ActivityCalendar,
   CacheEfficiency,
   ClaudeMdFiles,
+  ContextOverhead,
   CostBreakdown,
   CostBreakdownBy,
   DataCoverage,
@@ -182,6 +187,25 @@ export class AnalyticsRepository {
       outputTokens: tokens.output,
       // M-18: "`0` when the denominator is 0" — stated, so it is not a substituted value.
       hitRatio: denominator === 0 ? 0 : tokens.cacheRead / denominator,
+    };
+  }
+
+  /**
+   * `q:contextOverhead` (§6.4, A-11) — the two grounding totals plus the heaviest-sessions
+   * leaderboard that replaced the cache-efficiency gauge (user directive 2026-07-22).
+   *
+   * ⚠️ The two totals come from the SAME `tokenTotals()` M-02/M-04 reads on for every other token
+   * figure, so `outputTokens` here and the Cost panel's output column can never disagree. ⚠️ No
+   * ratio is computed here: `cacheReadTokens / outputTokens` is a display ratio derived at the
+   * presentation edge and left undefined when `outputTokens = 0` (A-11, CLAUDE.md §1) — this
+   * payload just carries the raw `0`, never a fabricated quotient.
+   */
+  contextOverhead(context: QueryContext): ContextOverhead {
+    const tokens = this.#events.tokenTotals(context);
+    return {
+      cacheReadTokens: tokens.cacheRead,
+      outputTokens: tokens.output,
+      sessions: this.#sessions.heaviestByCacheRead(context, CONTEXT_OVERHEAD_LIMIT),
     };
   }
 

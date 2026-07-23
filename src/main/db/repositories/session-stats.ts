@@ -23,6 +23,7 @@ import { DbError } from '../errors';
 import { decodeCursor, encodeCursor, scopeClause, validateLimit, type QueryContext } from './scope';
 import type { SqlParam, SqliteDatabase } from '../sqlite';
 import type {
+  ContextOverhead,
   Page,
   SessionSort,
   SortDirection,
@@ -116,6 +117,13 @@ export const SESSION_HISTOGRAM_BUCKETS: readonly {
   { label: '4–8h', lowerSeconds: 14_400, upperSeconds: 28_800 },
   { label: '8h+', lowerSeconds: 28_800, upperSeconds: null },
 ];
+
+/**
+ * §6.4 (A-11) — the Context-overhead panel shows the ten heaviest sessions by cache-read tokens.
+ * Ten is the leaderboard the user acts on; the query orders and caps, so the whole set never
+ * crosses IPC (P-27/P-28).
+ */
+export const CONTEXT_OVERHEAD_LIMIT = 10;
 
 /** The `ORDER BY` column for each §4.5 `SessionSort`. A closed map — never an interpolated value. */
 const SORT_COLUMN: Readonly<Record<SessionSort, string>> = {
@@ -510,6 +518,70 @@ export class SessionStatsRepository extends Repository {
       if (index >= 0) counts[index] = (counts[index] ?? 0) + 1;
     }
     return counts;
+  }
+
+  /**
+   * §6.4 (A-11) — the heaviest sessions by cache-read tokens, most first.
+   *
+   * ⚠️ Population is M-01 (`is_synthetic = 0`): `tok_cache_read` is M-04's cache-read class and
+   * `tok_output` is M-02, so this leaderboard's per-session numbers sum to the same two totals the
+   * panel's headline shows. Both origins roll up (§2.1, ADR-020) — a subagent's cache reads are the
+   * parent session's — because nothing here filters `origin`.
+   *
+   * ⚠️ `label` is the project UNIT display name (ADR-040): the group's name when the user grouped
+   * this folder, else §3.3's folder-derived display name. Never the numeric unit id and never the
+   * encoded path (§1a). `startedAt` is `MIN(ts)` over the session's in-scope events (ADR-021 —
+   * stored UTC epoch ms; the renderer buckets to a local date), so a date filter narrows the start
+   * to the window the user is looking at rather than an event they filtered out.
+   *
+   * Ordered cache-read DESC, ties broken by session id for a stable page, then capped — a
+   * query-time aggregate, never stored (ADR-027).
+   */
+  heaviestByCacheRead(context: QueryContext, limit: number): ContextOverhead['sessions'] {
+    const scope = scopeClause(context.filter, 'e');
+    return this.all<{
+      readonly key: string;
+      readonly label: string;
+      readonly started_at: number;
+      readonly cache_read_tokens: number | bigint | null;
+      readonly output_tokens: number | bigint | null;
+    }>(
+      `WITH ${PROJECT_UNIT_CTE},
+       scoped AS (
+         SELECT e.session_id AS session_id, e.ts AS ts,
+                e.tok_output AS tok_output, e.tok_cache_read AS tok_cache_read
+         FROM   events e
+         WHERE  e.is_synthetic = 0${scope.sql}
+       ),
+       per_session AS (
+         SELECT session_id,
+                MIN(ts)                             AS started_at,
+                COALESCE(SUM(tok_output), 0)        AS output_tokens,
+                COALESCE(SUM(tok_cache_read), 0)    AS cache_read_tokens
+         FROM   scoped
+         GROUP BY session_id
+       )
+       SELECT ps.session_id      AS key,
+              -- ADR-040 — the project UNIT's display name (a group's name, or §3.3's folder name);
+              -- never the numeric unit id or the encoded path (§1a).
+              u.unit_name        AS label,
+              ps.started_at      AS started_at,
+              ps.cache_read_tokens AS cache_read_tokens,
+              ps.output_tokens   AS output_tokens
+       FROM   per_session ps
+       JOIN   sessions s      ON s.id = ps.session_id
+       JOIN   project_unit u  ON u.project_id = s.project_id
+       ORDER BY ps.cache_read_tokens DESC, ps.session_id ASC
+       LIMIT  ?`,
+      ...scope.params,
+      limit,
+    ).map((row) => ({
+      key: row.key,
+      label: row.label,
+      startedAt: row.started_at,
+      cacheReadTokens: sumToSafeNumber(row.cache_read_tokens, 'tokens.cacheRead'),
+      outputTokens: sumToSafeNumber(row.output_tokens, 'tokens.output'),
+    }));
   }
 
   #sessionCount(context: QueryContext): number {

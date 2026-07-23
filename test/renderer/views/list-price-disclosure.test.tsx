@@ -28,6 +28,7 @@ import type { Disclosures } from '../../../src/shared/ipc-contract';
 import {
   activityCalendar,
   cacheEfficiency,
+  contextOverhead,
   costBreakdown,
   modelTimeline,
   originSplit,
@@ -75,6 +76,7 @@ function tokensStubs(overrides: Partial<Record<string, () => unknown>> = {}) {
   return {
     'q:tokensByModel': () => ok(modelTimeline()),
     'q:cacheEfficiency': () => ok(cacheEfficiency()),
+    'q:contextOverhead': () => ok(contextOverhead()),
     'q:tokensByProject': () => ok(tokensByProject()),
     'q:costBreakdown': () => ok(costBreakdown()),
     'q:originSplit': () => ok(originSplit()),

@@ -230,6 +230,16 @@ const CHANNEL_PLAN: ChannelPlan = {
       expect(data.hitRatio).toBeLessThanOrEqual(1);
     },
   },
+  'q:contextOverhead': {
+    request: () => ALL_FILTER,
+    shape: (data) => {
+      // A-11 — two raw totals and a leaderboard array; no ratio on the wire (it is derived in
+      // the renderer). Both totals are real numbers, `0` included.
+      expect(typeof data.cacheReadTokens).toBe('number');
+      expect(typeof data.outputTokens).toBe('number');
+      expect(Array.isArray(data.sessions)).toBe(true);
+    },
+  },
   'q:costBreakdown': {
     request: () => ({ ...ALL_FILTER, by: 'model' as const }),
     shape: (data) => {

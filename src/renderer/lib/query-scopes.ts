@@ -24,6 +24,9 @@ const SCOPES: Partial<Record<IpcChannel, DataScope[]>> = {
   'q:tokensByModel': ['events'],
   'q:tokensByProject': ['events', 'projects'],
   'q:cacheEfficiency': ['events'],
+  // A-11 — token sums (events), the per-session leaderboard (sessions) and the unit name (projects,
+  // which a grouping change moves).
+  'q:contextOverhead': ['events', 'sessions', 'projects'],
   'q:costBreakdown': ['events', 'projects'],
   'q:sessionHistogram': ['sessions', 'events'],
   'q:rhythmHeatmap': ['events'],

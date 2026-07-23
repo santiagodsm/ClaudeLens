@@ -13,7 +13,7 @@ import { formatCost } from '../../../src/renderer/lib/format';
 import { NO_PRICING_SENTENCE } from '../../../src/renderer/views/shared/disclosures';
 import { DB_BUSY, ok, renderView, resetAll, uninstallBridge } from './view-harness';
 import {
-  cacheEfficiency,
+  contextOverhead,
   costBreakdown,
   fileMetrics,
   modelTimeline,
@@ -34,7 +34,7 @@ afterEach(() => {
 function stubs(overrides: Partial<Record<string, () => unknown>> = {}) {
   return {
     'q:tokensByModel': () => ok(modelTimeline()),
-    'q:cacheEfficiency': () => ok(cacheEfficiency()),
+    'q:contextOverhead': () => ok(contextOverhead()),
     'q:tokensByProject': () => ok(tokensByProject()),
     'q:costBreakdown': () => ok(costBreakdown()),
     'q:originSplit': () => ok(originSplit()),
@@ -62,8 +62,8 @@ describe('§6.4 Tokens & Cost — states and the standing note', () => {
   });
 
   it('renders a per-card ErrorState without blanking the view', async () => {
-    renderView(<TokensView />, stubs({ 'q:cacheEfficiency': () => DB_BUSY }));
-    const card = await screen.findByTestId('tokens-cache-gauge');
+    renderView(<TokensView />, stubs({ 'q:contextOverhead': () => DB_BUSY }));
+    const card = await screen.findByTestId('tokens-context-overhead');
     expect(within(card).getByTestId('error-state')).toHaveAttribute('data-error-code', 'E_DB_BUSY');
     expect(screen.getByTestId('tokens-cost-panel')).toBeInTheDocument();
   });
@@ -142,7 +142,11 @@ describe('§6.4 Tokens & Cost — the Cost panel’s three conditions', () => {
 
     fireEvent.click(screen.getByTestId('cost-by-toggle-project'));
     await waitFor(() => {
-      expect(screen.getByRole('columnheader', { name: /project/i })).toBeInTheDocument();
+      // Scoped to the cost table: the context-overhead leaderboard also has a "Project" column,
+      // so an unscoped columnheader query would now match two headers (A-11).
+      expect(
+        within(screen.getByTestId('cost-table')).getByRole('columnheader', { name: /project/i }),
+      ).toBeInTheDocument();
     });
     expect(screen.getByTestId('tokens-cost-panel-disclosure')).toHaveTextContent(
       '2 records uncosted',
@@ -161,56 +165,58 @@ describe('§6.4 Tokens & Cost — the Cost panel’s three conditions', () => {
   });
 });
 
-describe('§6.4 Tokens & Cost — cache efficiency (user directive 2026-07-22)', () => {
-  it('names the two real token counts and drops the M-18 jargon', async () => {
+describe('§6.4 Tokens & Cost — context overhead (A-11, user directive 2026-07-22)', () => {
+  it('leads with the re-read-per-output ratio and the two grounding totals', async () => {
+    // The default payload: 900,000 cache reads over 30,000 output → 30 tokens re-read per output.
     renderView(<TokensView />, stubs());
-    const card = await screen.findByTestId('tokens-cache-gauge');
-    // The two real numbers lead: cache reads (40,000) and fresh input (10,000).
-    expect(within(card).getByText('40,000')).toBeInTheDocument();
-    expect(within(card).getByText('10,000')).toBeInTheDocument();
-    // Plain meaning, no metric id and none of the old jargon subtitle.
-    expect(within(card).getByTestId('cache-caption')).toHaveTextContent(
-      /reused from cache instead of re-sent/i,
-    );
-    expect(card).not.toHaveTextContent('M-18');
-    expect(card.textContent ?? '').not.toContain('Share of input served from cache');
+    const card = await screen.findByTestId('tokens-context-overhead');
+    const headline = within(card).getByTestId('context-overhead-headline');
+    expect(headline).toHaveTextContent('re-read about 30 tokens of context for every 1 token');
+    // The two real numbers are shown in full.
+    expect(within(card).getByText('900,000')).toBeInTheDocument();
+    expect(within(card).getByText('30,000')).toBeInTheDocument();
   });
 
-  it('⚠️ shows the honest 99.9%, not a flat 100%, when cache reads dwarf input', async () => {
-    // The user's "it is always 100 percent" is arithmetically correct — read/(read+input) really
-    // is ~0.9994 on this shape of data — so the fix is to reveal the tenth, not to change the sum.
-    const reads = 19_400_000_000;
-    const input = 11_000_000;
+  it('lists the heaviest sessions by PROJECT NAME, cache-read first — never an id or a path', async () => {
+    renderView(<TokensView />, stubs());
+    const card = await screen.findByTestId('tokens-context-overhead');
+    const rows = within(card).getAllByTestId('context-overhead-row');
+    // Two sessions, heaviest cache-read first (demo-alpha 600K before demo-beta 300K).
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toHaveTextContent('demo-alpha');
+    expect(rows[1]).toHaveTextContent('demo-beta');
+    // §1a — the stable session id is used for React identity only and is never on screen.
+    expect(card.textContent ?? '').not.toContain('sess-0000-1111');
+    expect(card.textContent ?? '').not.toContain('-work-demo-alpha');
+  });
+
+  it('⚠️ says "no output tokens", not a fabricated ratio, when output is zero', async () => {
     renderView(
       <TokensView />,
       stubs({
-        'q:cacheEfficiency': () =>
-          ok(
-            cacheEfficiency({
-              cacheReadTokens: reads,
-              inputTokens: input,
-              hitRatio: reads / (reads + input),
-            }),
-          ),
+        'q:contextOverhead': () =>
+          ok(contextOverhead({ cacheReadTokens: 5_000, outputTokens: 0, sessions: [] })),
       }),
     );
-    const gauge = await screen.findByTestId('gauge');
-    // read/(read+input) = 19.4e9 / 19.411e9 = 0.99943… → 99.9%.
-    expect(gauge).toHaveTextContent('99.9%');
-    expect(gauge).not.toHaveTextContent('100%');
+    const card = await screen.findByTestId('tokens-context-overhead');
+    expect(within(card).getByTestId('context-overhead-headline')).toHaveTextContent(
+      'No output tokens in this range yet.',
+    );
+    // Never a NaN, never a divide-by-zero artefact, never a bare "0" ratio.
+    expect(card.textContent ?? '').not.toContain('NaN');
+    expect(card.textContent ?? '').not.toContain('Infinity');
   });
 
-  it('renders no needle when the denominator is zero, rather than 0%', async () => {
+  it('renders no leaderboard when there are no sessions in range', async () => {
     renderView(
       <TokensView />,
       stubs({
-        'q:cacheEfficiency': () =>
-          ok(cacheEfficiency({ cacheReadTokens: 0, inputTokens: 0, hitRatio: 0 })),
+        'q:contextOverhead': () =>
+          ok(contextOverhead({ cacheReadTokens: 0, outputTokens: 0, sessions: [] })),
       }),
     );
-    const gauge = await screen.findByTestId('gauge');
-    expect(gauge).toHaveTextContent('not available');
-    expect(gauge).not.toHaveTextContent('0%');
+    await screen.findByTestId('tokens-context-overhead');
+    expect(screen.queryByTestId('context-overhead-leaderboard')).not.toBeInTheDocument();
   });
 
   it('renders the M-17 donut with both percentages and the absolute subagent figure', async () => {

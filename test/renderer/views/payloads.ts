@@ -13,6 +13,7 @@
 import type {
   ActivityCalendar,
   CacheEfficiency,
+  ContextOverhead,
   CostBreakdown,
   FileMetricRow,
   ModelTimeline,
@@ -103,6 +104,32 @@ export function cacheEfficiency(overrides: Partial<CacheEfficiency> = {}): Cache
     cacheWriteTokens: 2_000,
     outputTokens: 3_000,
     hitRatio: 0.8,
+    ...overrides,
+  };
+}
+
+export function contextOverhead(overrides: Partial<ContextOverhead> = {}): ContextOverhead {
+  // A-11 — two heaviest sessions, cache-read DESC, each labelled by a project NAME (never an id).
+  // The ratio is derived in the renderer from these totals; the payload carries no quotient.
+  return {
+    cacheReadTokens: 900_000,
+    outputTokens: 30_000,
+    sessions: [
+      {
+        key: 'sess-0000-1111',
+        label: 'demo-alpha',
+        startedAt: T0,
+        cacheReadTokens: 600_000,
+        outputTokens: 18_000,
+      },
+      {
+        key: 'sess-2222-3333',
+        label: 'demo-beta',
+        startedAt: T0 + 24 * HOUR,
+        cacheReadTokens: 300_000,
+        outputTokens: 12_000,
+      },
+    ],
     ...overrides,
   };
 }

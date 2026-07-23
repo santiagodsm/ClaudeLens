@@ -23,7 +23,7 @@ import { useQuery } from '../hooks/use-query';
 import { formatCompact, formatCost } from '../lib/format';
 import { useAppStore } from '../store/app-store';
 import { ViewShell } from '../shell/ViewShell';
-import { CacheEfficiency } from './charts/CacheEfficiency';
+import { ContextOverhead } from './charts/ContextOverhead';
 import { ModelAreaChart } from './charts/ModelAreaChart';
 import { OriginDonut, unlinkedRunsFootnote } from './charts/OriginDonut';
 import { ProjectTreemap } from './charts/ProjectTreemap';
@@ -96,7 +96,7 @@ export function TokensView(): JSX.Element {
   const [openProject, setOpenProject] = useState<number | null>(null);
 
   const timeline = useQuery('q:tokensByModel', { ...filter, mode, bucket });
-  const cache = useQuery('q:cacheEfficiency', filter);
+  const overhead = useQuery('q:contextOverhead', filter);
   const byProject = useQuery('q:tokensByProject', filter);
   const cost = useQuery('q:costBreakdown', { ...filter, by });
   const origin = useQuery('q:originSplit', filter);
@@ -387,17 +387,19 @@ export function TokensView(): JSX.Element {
           ) : undefined}
         </ChartCard>
 
+        {/* A-11 — the actionable panel that replaced the cache-efficiency gauge (user directive
+            2026-07-22): the gauge sat at ~99.9% for everyone and was not actionable. */}
         <ChartCard
-          title="Cache efficiency"
-          subtitle="How much of the input was reused from cache instead of re-sent — higher is cheaper"
+          title="Context overhead"
+          subtitle="How much conversation you re-read from cache per token written — and which sessions carry it"
           className="col-span-12 xl:col-span-4"
           index={1}
-          loading={cache.loading && cache.data === null}
-          error={cache.error}
-          onRetry={cache.refetch}
-          data-testid="tokens-cache-gauge"
+          loading={overhead.loading && overhead.data === null}
+          error={overhead.error}
+          onRetry={overhead.refetch}
+          data-testid="tokens-context-overhead"
         >
-          {cache.data !== null ? <CacheEfficiency data={cache.data} /> : undefined}
+          {overhead.data !== null ? <ContextOverhead data={overhead.data} /> : undefined}
         </ChartCard>
       </div>
 

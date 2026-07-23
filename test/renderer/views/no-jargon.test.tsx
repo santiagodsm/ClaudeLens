@@ -31,6 +31,7 @@ import { ok, renderView, resetAll, uninstallBridge } from './view-harness';
 import {
   activityCalendar,
   cacheEfficiency,
+  contextOverhead,
   costBreakdown,
   fileMetrics,
   modelTimeline,
@@ -99,6 +100,7 @@ const FULL_STUBS = {
   // Tokens
   'q:tokensByModel': () => ok(modelTimeline()),
   'q:cacheEfficiency': () => ok(cacheEfficiency()),
+  'q:contextOverhead': () => ok(contextOverhead()),
   'q:tokensByProject': () => ok(tokensByProject()),
   'q:costBreakdown': () => ok(costBreakdown()),
   'q:originSplit': () => ok(originSplit()),

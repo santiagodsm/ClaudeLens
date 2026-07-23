@@ -107,6 +107,8 @@ export function createHandlers(deps: HandlerDeps): IpcHandlerMap {
       ok(dataset.analytics.tokensByModel(dataset.queryContext(req), req.bucket, req.mode)),
     'q:tokensByProject': (req) => ok(dataset.analytics.tokensByProject(dataset.queryContext(req))),
     'q:cacheEfficiency': (req) => ok(dataset.analytics.cacheEfficiency(dataset.queryContext(req))),
+    // A-11 — where cache-read volume concentrates, by session (§6.4, replaced the gauge).
+    'q:contextOverhead': (req) => ok(dataset.analytics.contextOverhead(dataset.queryContext(req))),
     'q:costBreakdown': (req) =>
       ok(dataset.analytics.costBreakdown(dataset.queryContext(req), req.by)),
     'q:sessionHistogram': (req) =>
