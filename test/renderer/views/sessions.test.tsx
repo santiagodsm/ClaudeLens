@@ -99,8 +99,13 @@ describe('§6.5 Sessions & Time — states', () => {
     expect(knownZero).not.toHaveAttribute('data-empty');
 
     // ⚠️ The fix itself. Without a block-forming display the cells exist in the DOM and occupy no
-    // space, which is exactly the state that shipped.
-    for (const cell of cells) expect(cell).toHaveClass('inline-block');
+    // space, which is exactly the state that shipped. The Rhythm grid uses `fill` (full-width
+    // `block` cells that grow with the window, user request 2026-07-23); `block` is block-forming
+    // just as `inline-block` was, so `w-full`/`h-5` apply and the grid can never collapse again.
+    for (const cell of cells) {
+      expect(cell).toHaveClass('block', 'w-full');
+      expect(cell).not.toHaveClass('inline');
+    }
   });
 
   it('is offline-identical: every call is a local query', async () => {

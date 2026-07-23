@@ -28,6 +28,12 @@ export interface HeatmapCellProps {
   unit?: string;
   /** §6.3's calendar is violet, §6.5's rhythm heatmap is cyan. Magnitude either way. */
   ramp?: SequentialRamp;
+  /**
+   * When true the cell fills its container (`block`, full width, a fixed row height) instead of
+   * being a fixed 16 px square. §6.5's Rhythm heatmap uses this so its grid grows with the window
+   * (user request 2026-07-23); §6.3's calendar keeps the fixed square that a week grid needs.
+   */
+  fill?: boolean;
   onClick?: () => void;
   className?: string;
   'data-testid'?: string;
@@ -39,6 +45,7 @@ export function HeatmapCell({
   bucketLabel,
   unit = 'events',
   ramp = 'violet',
+  fill = false,
   onClick,
   className,
   'data-testid': testId = 'heatmap-cell',
@@ -55,16 +62,15 @@ export function HeatmapCell({
     'aria-label': description,
     style: { background },
     className: cx(
-      // ⚠️ `inline-block` is load-bearing, not decoration. A bare `<span>` is `display: inline`,
-      // and `width`/`height` do not apply to a non-replaced inline box — so `size-4` was silently
-      // ignored and the cell laid out at 2 × 20 px (its two 1 px borders, on the line box). §6.5's
-      // Rhythm heatmap puts this component straight into a `<td>` and rendered an empty grid;
-      // §6.3's calendar only looked correct because `CalendarHeatmap` happens to wrap each cell in
-      // an `inline-flex` span, which blockifies the child. The cell must carry its own box rather
-      // than inherit one from whatever formatting context a caller happens to provide — a chart
-      // that renders no marks over real data is the visual form of the silently wrong number
-      // (CLAUDE.md §1, §6.12).
-      'inline-block size-4 rounded-sm border border-border transition-colors duration-hover',
+      // ⚠️ The cell carries its OWN box — `inline-block`/`block` — rather than inherit one from
+      // whatever formatting context a caller provides. A bare `<span>` is `display: inline`, and
+      // `width`/`height` do not apply to a non-replaced inline box, so a fixed size would be
+      // silently ignored and the cell would lay out at 2 × 20 px on the line box — a chart that
+      // renders no marks over real data, the visual form of the silently wrong number (§1, §6.12).
+      'rounded-sm border border-border transition-colors duration-hover',
+      // `fill` grows the cell to its container (Rhythm heatmap, full-width grid); the default is a
+      // fixed 16 px square (activity calendar's week grid).
+      fill ? 'block h-5 w-full' : 'inline-block size-4',
       value === null && 'border-dashed',
       className,
     ),

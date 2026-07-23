@@ -33,13 +33,20 @@ export function RhythmHeatmap({
   const max = rhythm.cells.reduce((highest, cell) => Math.max(highest, cell.events), 0);
 
   return (
+    // §6.5 — the grid grows to fill the view (user request 2026-07-23). `table-fixed` + `w-full`
+    // splits the 24 hour columns evenly across whatever width is available; the narrow weekday
+    // column is pinned so it does not steal an equal share. A min-width keeps the cells legible on
+    // a very narrow window, where the wrapper scrolls rather than crush them to nothing.
     <div className="overflow-x-auto" data-testid={testId}>
-      <table className="border-separate" style={{ borderSpacing: 'var(--space-1)' }}>
+      <table
+        className="w-full min-w-[32rem] table-fixed border-separate"
+        style={{ borderSpacing: 'var(--space-1)' }}
+      >
         <caption className="sr-only">Events by local weekday and hour of day</caption>
         <thead>
           <tr>
-            <th scope="col" className="sr-only">
-              Weekday
+            <th scope="col" className="w-8 text-micro font-normal text-text-faint">
+              <span className="sr-only">Weekday</span>
             </th>
             {Array.from({ length: HOURS }, (_unused, hour) => (
               <th
@@ -67,6 +74,7 @@ export function RhythmHeatmap({
                     bucketLabel={`${label} ${String(hour).padStart(2, '0')}:00`}
                     unit="events"
                     ramp="cyan"
+                    fill
                   />
                 </td>
               ))}
