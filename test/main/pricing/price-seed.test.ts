@@ -140,11 +140,12 @@ describe('resources/price-seed.json', () => {
     expect(entry('claude-3-5-haiku-20241022', '2024-10-22T00:00:00.000Z')).toBeDefined();
 
     // ── UNSOURCED: an early sentinel, and it MUST say so ────────────────────────────────────
-    // §1.5 — a wrong number is invisible, an admitted gap is visible. These five are dateless
+    // §1.5 — a wrong number is invisible, an admitted gap is visible. These six are dateless
     // snapshots with no published availability date. An over-early `valid_from` is safe by
     // construction (no event can predate its own model) and is disclosed in the note; a guessed
     // exact date would be neither.
     for (const model of [
+      'claude-opus-5',
       'claude-opus-4-8',
       'claude-opus-4-7',
       'claude-opus-4-6',
@@ -158,10 +159,18 @@ describe('resources/price-seed.json', () => {
     expect(entry('claude-sonnet-5', '2024-01-01T00:00:00.000Z')?.note).toContain('UNVERIFIED');
     expect(entry('claude-sonnet-5', '2026-09-01T00:00:00.000Z')?.note).toContain('SOURCED');
 
-    // Every entry carries provenance — there is no undocumented rate in a published seed.
+    // Every entry carries provenance — there is no undocumented rate in a published seed. The
+    // note must name the date its rates were read off the published page, and that date must be
+    // one this repo has actually swept: 2026-07-22 for the original table, 2026-07-24 for the
+    // `claude-opus-5` row added afterwards. A free-form date regex would pass a typo; an
+    // enumeration makes adding an unswept entry a test failure rather than a silent one.
+    const VERIFIED_ON = ['2026-07-22', '2026-07-24'];
     for (const model of parsed.models) {
       expect(typeof model.note, model.model).toBe('string');
-      expect(model.note, model.model).toContain('2026-07-22');
+      expect(
+        VERIFIED_ON.some((date) => model.note.includes(date)),
+        `${model.model} note must cite one of ${VERIFIED_ON.join(' / ')}`,
+      ).toBe(true);
     }
   });
 

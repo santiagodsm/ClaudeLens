@@ -27,6 +27,18 @@
       "note": "Rates verified 2026-07-22 against docs/en/about-claude/pricing. effectiveFrom SOURCED: docs/en/about-claude/models/overview — Mythos 5 became available 'beginning the same day' as Fable 5. cache_write is the 5-minute rate and cache_write_1h the published 1-hour rate ($20/MTok), both verified against the same page on 2026-07-22 and both STORED, never derived from input (A-05, ADR-024)."
     },
     {
+      "model": "claude-opus-5",
+      "rates": {
+        "input": 5,
+        "output": 25,
+        "cache_write": 6.25,
+        "cache_write_1h": 10,
+        "cache_read": 0.5
+      },
+      "effectiveFrom": "2024-01-01T00:00:00.000Z",
+      "note": "Rates verified 2026-07-24 against docs/en/about-claude/pricing. effectiveFrom UNVERIFIED — no published availability date found for this dateless snapshot; a deliberately early sentinel, safe by construction because no event can predate its own model. cache_write is the 5-minute rate and cache_write_1h the published 1-hour rate ($10/MTok), both verified against the same page on 2026-07-24 and both STORED, never derived from input (A-05, ADR-024)."
+    },
+    {
       "model": "claude-opus-4-8",
       "rates": {
         "input": 5,
