@@ -58,6 +58,12 @@ export function ListPriceLine(): JSX.Element {
 /** The route the uncosted disclosure links to (§6.4: "a link to Settings → Pricing"). */
 export const PRICING_SETTINGS_PATH = '/settings#pricing';
 
+/**
+ * A-16 — the route the repeated-API-call coverage line links to. The card's own `id` on §6.10, so
+ * the link lands on the control rather than on the top of a long screen.
+ */
+export const REREAD_SETTINGS_PATH = '/settings#reread';
+
 /** §6.5/§6.12 — the caption on a hatched, pre-transcript chart region. */
 export const PARTIAL_CAPTION = 'prompts only — no transcript detail';
 
@@ -143,7 +149,11 @@ export function costDisclosure(costNanoUsd: number | null, uncosted: UncostedSum
 export type CacheSplitDisclosure = Pick<
   Disclosures,
   'cacheSplitUnknownEvents' | 'cacheSplitArchivedEvents' | 'cacheSplitMismatches'
->;
+> &
+  // Migration 0011 — optional so the type stays satisfiable by a caller that predates it; the
+  // store's own `Disclosures` snapshot supplies it, and `undefined` reads as "nothing to say"
+  // rather than as a zero count.
+  Partial<Pick<Disclosures, 'repeatedApiCalls'>>;
 
 /** One line of a stacked disclosure block, carrying its own stable React key. */
 export interface DisclosureLine {
@@ -211,6 +221,146 @@ export function cacheSplitDisclosure(split: CacheSplitDisclosure | null): Disclo
 }
 
 /**
+ * §4.6 (migration 0011) — the repeated-API-call caveat. The subset of `Disclosures` it needs.
+ */
+export type RepeatedApiCallDisclosure = Pick<Disclosures, 'repeatedApiCalls'>['repeatedApiCalls'];
+
+/**
+ * ⚠️ **The sentence for "we have not looked yet", which must never be confusable with "we
+ * looked and found nothing".** §1a: no field name, no metric code, no `message.id` — it says what
+ * happened and what would change it, in words.
+ */
+export const REPEATS_NOT_CHECKED_SENTENCE =
+  'none of these records have been checked for repeated usage — the app only recently began' +
+  ' recording which call a record came from, so this is not measured, which is not the same as' +
+  ' none found';
+
+/**
+ * The reach of the check, for records that are merely old.
+ *
+ * ⚠️ **AMENDED 2026-07-24 (A-16) — this sentence used to promise nothing, and that was correct
+ * at the time.** A normal sync resumes from where it stopped and never re-reads a committed line
+ * (§5.2 rule 3, §5.3 `GREW`), and until A-16 the only thing that re-parsed everything was a change
+ * of Claude data directory (§5.1, §3.18) — so the old wording said, deliberately, that these
+ * records were checked "only if their file is rewritten". §3.18's explicit rebuild now has a
+ * control (§6.10 card 4a), the remedy exists, and the sentence names it. ⚠️ A sentence that keeps
+ * saying "there is no way to fix this" after the way exists is a lie of exactly the kind this
+ * module is built to prevent — the reverse direction of the same failure.
+ *
+ * ⚠️ It stays distinct from `REPEATS_UNCHECKABLE_SENTENCE`, which must NOT name this remedy: the
+ * rebuild reaches live transcripts and can never reach archived or vanished ones.
+ */
+export const REPEATS_UNCHECKED_SENTENCE =
+  'not been checked — they were read before the app started recording which call each record came' +
+  ' from, so any that repeat a call are still added up more than once in these totals. A normal' +
+  ' sync only reads what is new; reading your transcripts again from the start will check them';
+
+/** ⚠️⚠️ The half that can never be checked at all — archived or vanished transcripts. */
+export const REPEATS_UNCHECKABLE_SENTENCE =
+  'from archived or missing transcripts, which are never re-read — any that repeat a call can' +
+  ' never be checked or corrected, so they stay added up more than once';
+
+/**
+ * The finding itself, once there is a checked population to have found it in.
+ *
+ * ⚠️ **AMENDED 2026-07-24 (ADR-042) — this used to end "counted more than once … nothing has been
+ * changed to correct it yet", and after ADR-042 that is FALSE for the checked population: those
+ * totals now count each such call ONCE, at its final usage.** A caption that keeps saying the
+ * number is inflated after it has been corrected is the same lie as the reverse — it looks like an
+ * explanation and explains the opposite of what is true (CLAUDE.md §1/§1a). The inflation caveat now
+ * lives on the UNCHECKED / UNCHECKABLE sentences, which is where it is still true (those records
+ * carry no call id, so they cannot be collapsed).
+ */
+export const REPEATS_FOUND_SENTENCE =
+  'came from a call that produced more than one record. These totals now count each such call' +
+  ' once, at its final usage, so it is not added up more than once';
+
+/**
+ * §4.6 / §6.12 (migration 0011) — records that share an API call, disclosed **with the coverage
+ * that makes the number readable**.
+ *
+ * ⚠️⚠️ **THE RULE THIS FUNCTION EXISTS TO ENFORCE, and the one a later edit is most likely to
+ * "simplify" away: "none found" and "not checked" are DIFFERENT STATES AND LOOK DIFFERENT.**
+ * Every record ingested before the app started reading API-call ids has none, so `records === 0`
+ * over a checked population of `0` means *nothing was examined* — and rendering that as "0
+ * repeated records" would be a plausible number that means the opposite of what it says, which
+ * is CLAUDE.md §1's worst outcome wearing a disclosure's clothes. So:
+ *
+ *   · nothing checked            → say so, loudly, and never show a repeat count.
+ *   · something checked, some not→ show the count AND how much of the data it speaks for.
+ *   · everything checked, none   → render nothing. This is the only silent state, and it is the
+ *                                  genuine "nothing to say" one, so it follows §6.12's
+ *                                  data-dependent rule rather than the standing-caveat one.
+ *
+ * ⚠️ The unchecked half is split the way A-05's is (§4.6): a rebuild reaches live transcripts and
+ * can never reach archived or vanished ones, so the remedy is named only where it can work.
+ */
+export function repeatedApiCallDisclosure(
+  repeats: RepeatedApiCallDisclosure | null,
+): DisclosureLine[] {
+  if (repeats === null) return [];
+  const { records, checkedRecords, uncheckedRecords, uncheckableRecords } = repeats;
+  const lines: DisclosureLine[] = [];
+
+  if (checkedRecords === 0) {
+    // ⚠️ NOT "0 repeated records". There is no count to give, and giving one would be a claim.
+    lines.push({
+      key: 'repeats-not-checked',
+      node: (
+        <span data-testid="repeats-unmeasured-disclosure">{REPEATS_NOT_CHECKED_SENTENCE}.</span>
+      ),
+    });
+  } else if (records > 0) {
+    lines.push({
+      key: 'repeats-found',
+      node: (
+        <span data-testid="repeats-found-disclosure">
+          {formatInteger(records)} of the {formatInteger(checkedRecords)} records checked{' '}
+          {REPEATS_FOUND_SENTENCE}.
+        </span>
+      ),
+    });
+  }
+
+  // The coverage line rides alongside whenever part of the data was out of reach, in both of the
+  // states above AND in the "checked, none found" state — because "none found" over half the data
+  // is a different fact from "none found" over all of it.
+  if (checkedRecords > 0 && uncheckedRecords > 0) {
+    lines.push({
+      key: 'repeats-unchecked',
+      node: (
+        <span data-testid="repeats-unchecked-disclosure">
+          {formatInteger(uncheckedRecords)} older record
+          {uncheckedRecords === 1 ? ' has' : 's have'} {REPEATS_UNCHECKED_SENTENCE}.
+          {/* A-16 — the same shape the uncosted line uses for Settings → Pricing: the remedy is
+              named AND reachable from where the caveat is read. */}
+          {' · '}
+          <Link
+            to={REREAD_SETTINGS_PATH}
+            data-testid="reread-settings-link"
+            className="underline decoration-dotted underline-offset-2 hover:text-text-primary"
+          >
+            Settings → Read your transcripts again
+          </Link>
+        </span>
+      ),
+    });
+  }
+  if (uncheckableRecords > 0) {
+    lines.push({
+      key: 'repeats-uncheckable',
+      node: (
+        <span data-testid="repeats-uncheckable-disclosure">
+          {formatInteger(uncheckableRecords)} record
+          {uncheckableRecords === 1 ? ' is' : 's are'} {REPEATS_UNCHECKABLE_SENTENCE}.
+        </span>
+      ),
+    });
+  }
+  return lines;
+}
+
+/**
  * Everything that must sit beside a `$` figure, in one place, in one order (§6.12, INV-10).
  *
  * ⚠️ Line 1 is the **standing** list-price caveat and is always present. Lines 2+ are the
@@ -227,6 +377,9 @@ export function costDisclosureBlock(
     { key: 'list-price', node: <ListPriceLine /> },
     { key: 'cost', node: costDisclosure(costNanoUsd, uncosted) },
     ...cacheSplitDisclosure(split),
+    // Migration 0011 — last, because it is the newest and least settled fact about the figure,
+    // and because it qualifies the token sums behind the `$` rather than the pricing of them.
+    ...repeatedApiCallDisclosure(split?.repeatedApiCalls ?? null),
   ];
   return (
     <>

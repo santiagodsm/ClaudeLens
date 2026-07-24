@@ -316,6 +316,15 @@ function parseEventRecord(
       encodedProject: source.encodedProject,
       uuid,
       parentUuid: readString(record, 'parentUuid'),
+      // Rule 13 (migration 0011) — the API call this record came from, and the request that
+      // produced it. ⚠️ Read, stored and NOTHING ELSE: `eventKey` above is still `uuid ?? path#line`
+      // (rule 3, ADR-019), so these change no identity, no dedup and no token sum. Several records
+      // of one assistant turn share `message.id` while each carries its own `uuid`; storing it is
+      // what lets §4.6 count that instead of guessing at it.
+      // ⚠️ `readString` returns `null` for absent AND for empty-string, which is the right
+      // conflation here: an empty id names no call. No placeholder is ever written (§3.5, 0011).
+      messageId: message === null ? null : readString(message, 'id'),
+      requestId: readString(record, 'requestId'),
       // Rule 4 — stored, but NOT the origin decision.
       isSidechain: readBoolean(record, 'isSidechain'),
       model,

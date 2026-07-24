@@ -189,6 +189,9 @@ const CHANNEL_PLAN: ChannelPlan = {
       expect(typeof data.phase).toBe('string');
     },
   },
+  'sync:rebuild': {
+    skip: 'A-16 / §3.18 — it DELETES every DERIVED row and starts a cold re-parse. Invoking it mid-sweep would purge the dataset the fifty channels after it are asserted against, and `q:sessionDetail` would then be asserting its own error path. `test/main/sync/rebuild.test.ts` drives it end to end against a real parsed directory.',
+  },
 
   // ---- §4.5 — the seventeen ----
   'q:overviewTiles': {
@@ -637,7 +640,11 @@ describe('every §4 channel answers over a real parsed dataset (ADR-031, §12.2)
     expect(failures).toEqual([]);
     expect(called).toBe(channels.length - skipped.length);
     // The allowlist is small and stays small. Growing it is a decision, and this makes it one.
-    expect(skipped.length).toBeLessThanOrEqual(3);
+    // ⚠️ 3 → 4 on 2026-07-24 (A-16), and the decision is recorded rather than absorbed: the
+    // fourth is `sync:rebuild`, skipped for the same class of reason as `action:execute` — it
+    // mutates the thing every other channel in this sweep is asserted against. Its own suite
+    // calls it against a real parsed directory, so it is covered, not excused.
+    expect(skipped.length).toBeLessThanOrEqual(4);
     rig.db.close();
   });
 

@@ -625,7 +625,11 @@ CREATE TABLE file_manifest (
   -- Orphan retention (ADR-041, migration 0009). 0 = live/purged. 1 = the file DISAPPEARED from
   -- <claudeDir> and its history is RETAINED — a SECOND road into the RETAINED class, distinct
   -- from archive_id because there is no archives row and nothing to undo (§2.2, §5.3).
-  retained_orphan  INTEGER NOT NULL DEFAULT 0 CHECK (retained_orphan IN (0, 1))
+  retained_orphan  INTEGER NOT NULL DEFAULT 0 CHECK (retained_orphan IN (0, 1)),
+  -- API-call-id coverage (migration 0011). The number of LEADING lines of this file whose records
+  -- were ingested before the app read message.id. An event was examined iff
+  -- events.line_no > api_ids_from_line. 0 = the whole file was read by a build that reads the id.
+  api_ids_from_line INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX idx_file_manifest_kind    ON file_manifest(kind);
 CREATE INDEX idx_file_manifest_archive ON file_manifest(archive_id) WHERE archive_id IS NOT NULL;
@@ -638,6 +642,26 @@ row with `retained_orphan = 1` came from a transcript that **vanished** rather t
 moved, so it has no `archives` row, no recoverable location and no undo. The purge predicate
 (§3.18) spares `archive_id IS NOT NULL` **or** `retained_orphan = 1`; §5.3's `MISSING` branch sets
 it when `retainOrphanedHistory` is on; and it is cleared if the file ever returns (§5.3).
+
+⚠️⚠️ **AMENDED 2026-07-24 (migration 0011) — `api_ids_from_line`, THE HONESTY COLUMN.** It exists
+so that **"we checked and found nothing" and "we never checked" can never be the same number.**
+
+`events.message_id` (§3.5) is NULL both for a record that states no API-call id and for every row
+ingested before migration 0011. A count that could not tell those apart would report *"0 records
+repeat an API call"* for a database in which **nothing was ever examined** — a plausible number
+meaning the opposite of what it says, which is CLAUDE.md §1's worst outcome arriving dressed as a
+disclosure. So the boundary is recorded, per file, as a **line watermark** rather than a boolean,
+because a boolean is wrong under the append fast-path:
+
+| §5.3 classification | What happens to the watermark | Why it is exact |
+|---|---|---|
+| **GREW** (append) | untouched | the appended lines sit above it; a per-file boolean would have claimed the older lines were checked too |
+| **NEW**, or a row re-created after a purge | `DEFAULT 0` | the whole file was read by a build that reads the id |
+| **SHRANK / REWROTE** | reset to `0` alongside `byte_offset` | the file is re-read from line 1 by this build |
+| **ARCHIVED** / `retained_orphan = 1` | frozen at migration time | those transcripts are never re-parsed (§5.3, ADR-034/041), so their records can **never** be checked — which is why §4.6 gives them their own count and their own sentence |
+
+The migration backfills `api_ids_from_line = lines_parsed`, the only correct value for an existing
+row: every line that file has contributed so far was read by a build that did not look.
 
 ⚠️ **AMENDED 2026-07-22 (E10) — what `archives.archive_root` holds, so `archive_rel_path` has one
 reading.** §3.2 says `archive_rel_path` is "relative to `archives.archive_root`" while §9.3 puts the
@@ -800,6 +824,8 @@ CREATE TABLE events (
   subagent_run_id INTEGER REFERENCES subagent_runs(id) ON DELETE SET NULL,
   uuid            TEXT,
   parent_uuid     TEXT,
+  message_id      TEXT,                         -- message.id, verbatim (migration 0011); NULL if absent
+  request_id      TEXT,                         -- requestId, verbatim (migration 0011); NULL if absent
   is_sidechain    INTEGER NOT NULL DEFAULT 0 CHECK (is_sidechain IN (0,1)),
   model           TEXT,                         -- raw message.model, verbatim (ADR-025); NULL if absent
   is_synthetic    INTEGER NOT NULL DEFAULT 0 CHECK (is_synthetic IN (0,1)),
@@ -822,6 +848,13 @@ CREATE INDEX idx_events_file        ON events(source_file_id);
 CREATE INDEX idx_events_origin      ON events(session_id, origin);
 CREATE INDEX idx_events_parent_uuid ON events(parent_uuid) WHERE parent_uuid IS NOT NULL;
 CREATE UNIQUE INDEX uq_events_uuid  ON events(uuid) WHERE uuid IS NOT NULL;
+
+-- Migration 0011 — the grouped count §4.6's repeated-API-call disclosure makes. Partial on the
+-- same population the count uses, so it costs nothing for the rows that have no id.
+CREATE INDEX idx_events_message_id ON events(message_id, id)
+  WHERE message_id IS NOT NULL AND is_synthetic = 0
+    AND (tok_input + tok_output + tok_cache_write
+         + COALESCE(tok_cache_write_1h, 0) + tok_cache_read) > 0;
 
 -- Partial index over exactly the population that is priced and counted in model stats.
 -- The <synthetic> exclusion made structural rather than remembered.
@@ -860,8 +893,47 @@ CREATE INDEX idx_events_priceable ON events(model, ts, id)
 > event whose only tokens are 1-hour cache writes must be inside it. `cost.ts`'s `PRICEABLE`
 > predicate mirrors this index verbatim and the two are changed together.
 
+> ⚠️⚠️ **AMENDED 2026-07-24 (migration 0011) — `message_id` and `request_id`: the API call a
+> record came from, stored so repeated usage becomes MEASURABLE. It changes no number.**
+>
+> **The observation.** Claude Code commonly writes one assistant turn — text plus its tool calls —
+> as **several JSONL lines** that share one `message.id` and repeat the identical `message.usage`,
+> each carrying its own distinct `uuid`. Line identity (ADR-019, below) is therefore behaving
+> exactly as specified: `event_key` differs, the `ON CONFLICT DO NOTHING` correctly does not fire,
+> and those lines really are distinct records. But every one of them is summed into M-02/M-04/M-05,
+> so **one API call is charged N times.** This is the most plausible single explanation for a
+> lifetime total larger than it should be, and it is what made a $200/month subscriber read
+> $17,726.65 as money spent.
+>
+> **What migration 0011 deliberately did NOT do — and what ADR-042 then did.** 0011 changed no
+> number: it added the columns and a per-file watermark so the effect could be **sized against real
+> data** before anything was decided (a metric change sized by intuition is exactly the silently-wrong
+> number CLAUDE.md §1 forbids). ⚠️ **AMENDED 2026-07-24 (ADR-042) — it has now been sized and acted
+> on.** On the reference dataset 187,870 costed rows are 85,234 distinct calls; §5.9 M-02/M-04/M-05
+> now sum each API call ONCE, at its final line's usage, **at query time** (this migration's storage
+> and `event_key` are untouched). The full rule and its consequences are the ⚠️ block below §5.9's
+> table and ADR-042; §4.6's `repeatedApiCalls` disclosure remains, now reporting which records could
+> and could not be collapsed.
+>
+> ⚠️ **NEITHER COLUMN IS PART OF EVENT IDENTITY.** `event_key` is unchanged and ingest is still
+> `ON CONFLICT(event_key) DO NOTHING`. Grouping by `message_id` is a **query-time observation**
+> about rows that all legitimately exist. It is not a second dedup key, and no record is dropped,
+> merged or re-counted because of it.
+>
+> ⚠️ **Both are NULLABLE with no default and NO placeholder is ever written** — same shape and same
+> reason as `tok_cache_write_1h` above. A sentinel would put a word in the data the transcript does
+> not contain, and would make every pre-migration row look like a checked one. How "states no id"
+> is told apart from "was never read" is `file_manifest.api_ids_from_line` (§3.2).
+
 **Ingest is `INSERT ... ON CONFLICT(event_key) DO NOTHING`** (ADR-019). Re-parsing a file, replaying
 an append, or meeting the same record in two files can never double-count.
+
+⚠️ **What that sentence does and does not claim, stated because it was misread as covering more
+than it does.** It is about **one record met twice** — the same `event_key`, so the same line of the
+same file, or a record duplicated across two files. It says nothing about **several distinct records
+that share one API call**: those have different `event_key`s, are correctly stored as separate rows,
+and are each counted. That second thing is measured and disclosed (migration 0011, §4.6), not
+deduplicated.
 
 `tok_*` are plain 64-bit `INTEGER`. The largest observed accumulator is ~3.1e9 cache reads and sums
 stay far below `2^63`, so **`BigInt` is not used at the SQL layer**. Sums crossing the IPC boundary
@@ -1595,7 +1667,11 @@ else does (ADR-026).
   migration files are immutable** (STACK ADR-007).
 - **Purge** (`claudeDir` changed, or an explicit rebuild) runs inside one transaction, in FK-safe
   order, then triggers a full sync. It deletes **only DERIVED rows**, and the predicate is one
-  column everywhere:
+  column everywhere. ⚠️ **AMENDED 2026-07-24 (A-16) — "an explicit rebuild" now has a trigger:**
+  the `sync:rebuild` channel (§4.4), reached from §6.10's *Read your transcripts again from the
+  start* control. It runs this exact statement list then one `kind: 'full'` cycle —
+  `DatasetService.rebuildDerived()` — and is **not** a guarded action (it mutates no file; §5.7 is
+  unchanged). The guard argument below is unchanged and applies to it identically.
 
   ```sql
   -- The ONLY deletion predicate a purge may use. RETAINED rows survive, by EITHER marker:
@@ -1847,6 +1923,7 @@ transition of §5.1. It never partially applies.
 | `sync:start` | `{ kind: 'incremental' \| 'full' }` | `SyncState` |
 | `sync:cancel` | `void` | `SyncState` |
 | `sync:state` | `void` | `SyncState` |
+| `sync:rebuild` *(A-16)* | `void` | `SyncState` |
 
 ```ts
 interface SyncState {
@@ -1855,6 +1932,11 @@ interface SyncState {
   startedAt: number | null;
   filesTotal: number; filesDone: number;
   recordsIngested: number; badLines: number;
+  // ⚠️ ADR-019 — records this cycle offered that were ALREADY stored under the same event_key,
+  // so nothing was written twice. NOT the repeated-API-call count (§4.6, migration 0011): that
+  // one is several genuinely DISTINCT records sharing one API call, which line identity
+  // correctly does not treat as duplicates. This is per-cycle; that one describes the dataset.
+  recordsDeduplicated: number;
   queuedRescan: boolean;              // a watcher event arrived mid-cycle (§5.2)
   lastCompletedAt: number | null; lastDurationMs: number | null;
   error: AppError | null;
@@ -1864,6 +1946,38 @@ interface SyncState {
 `sync:start` while a cycle is running does **not** fail: it sets `queuedRescan` and returns the
 current state. `E_SYNC_BUSY` is reserved for `kind: 'full'` requested during a running cycle, which
 cannot be coalesced.
+
+⚠️ **AMENDED 2026-07-24 — `kind: 'full'` does NOT force a re-parse, and this is written down
+because the name implies otherwise.** `kind` reaches `SyncRunContext` and nothing in the scan or
+parse phase reads it: classification is §5.3's, driven by size and mtime, so an already-parsed file
+is still `UNCHANGED` or `GREW`. The only thing `'full'` changes is that it refuses to be coalesced
+into a running cycle. **The one path that re-parses everything is the §3.18 purge.**
+
+⚠️ **AMENDED 2026-07-24 (A-16) — `sync:rebuild` is that path, finally given a trigger.** §3.18 has
+always said the purge runs on "`claudeDir` changed, **or an explicit rebuild**", and §6.11 has
+always named a *Rebuild derived data* control; until A-16 the only *live* trigger was a change of
+Claude data directory (§5.1), so a line committed under an older build was never read again and
+anything the app learned to record afterwards never reached it — which is exactly why migration
+0011's repeated-API-call disclosure could name no remedy. `sync:rebuild` runs the **same pair**
+§5.1's fingerprint-changed row runs — `purge()` (DERIVED only, both RETAINED markers guarded per
+ADR-033/041, no USER table named per INV-12) then one `kind: 'full'` cycle — on the user's own
+explicit request, and reports progress and cancels on `evt:sync` / `sync:cancel` like any cycle.
+It is `E_SYNC_BUSY` while a cycle runs (the purge would delete manifest rows that cycle is writing)
+and `E_NO_DIR` with no directory configured.
+
+⚠️ **`sync:rebuild` is NOT a guarded action, and the ACT-01…07 catalogue (§5.7) is unchanged.**
+Guarded actions mutate the user's filesystem and each backs up what it destroys (§5.5 rule 1); this
+writes no file, moves no file and deletes nothing that has another source — every row it removes is
+re-derived from transcripts it never opens for writing. A restore point would hold a copy of data
+the transcripts already hold, so there is nothing to back up and no `audit_log` row to write, the
+same reasoning that keeps the §5.1 purge itself out of the catalogue. It stays **user-initiated and
+never automatic** (ADR-032: "no automatic recovery, ever").
+
+⚠️ **The honest limit, which the UI states in plain words (§1a) and a test asserts on the data:**
+archived transcripts (§5.3 `ARCHIVED`) and vanished-but-retained ones (`retained_orphan = 1`,
+ADR-041) are **never re-read**, so their `api_ids_from_line` watermark cannot move and their
+records stay uncheckable forever. A rebuild reaches everything except those, and the control must
+not imply a clean sweep — the same discipline as A-05's archived cache-split sentence.
 
 ## §4.5 Analytics queries
 
@@ -2118,6 +2232,17 @@ interface Disclosures {
   // disappearance only (NOT in-place compaction). UNFILTERED, like the A-05 counts.
   retainedOrphanSessions: number;
   retainedOrphanEvents: number;
+  // ⚠️⚠️ Migration 0011 — repeated API calls, MEASURED and not yet acted on. `records` alone is
+  // unreadable: `checkedRecords` is the denominator and `checkedRecords === 0` is the
+  // "NOT MEASURED" state, which must never be shown as "none found".
+  repeatedApiCalls: RepeatedApiCalls;
+}
+
+interface RepeatedApiCalls {
+  records: number;             // records sharing an API-call id with another record, over the checked half
+  checkedRecords: number;      // the denominator. 0 = nothing has been examined
+  uncheckedRecords: number;    // read before the app recorded the id; re-readable in principle
+  uncheckableRecords: number;  // ⚠️⚠️ archived / vanished transcripts — NEVER checkable
 }
 ```
 
@@ -2157,6 +2282,34 @@ a date range that excluded the orphaned sessions must not make the caveat vanish
 scope is **whole-file disappearance only** — an in-place compaction that drops old messages while
 keeping the file is not counted here and its dropped turns are not retained (ADR-041's honest limit,
 §11.10). The eventual per-session "kept" badge is a separate follow-up.
+
+⚠️⚠️ **AMENDED 2026-07-24 (migration 0011) — `repeatedApiCalls`, and why it is FOUR numbers.**
+
+Claude Code writes one assistant turn as several JSONL lines that share one `message.id` and repeat
+the identical `usage` (§3.5). Every one of them is summed, so one API call is counted more than
+once. ⚠️ **No metric changed** — §5.9 is untouched and no displayed figure moved. This disclosure
+exists so the effect can be **sized** before anything is decided about it.
+
+The count could not be one number, and the reason is the whole point of the field:
+
+- **`records` on its own is not evidence.** Rows ingested before the migration carry no id, so a
+  bare `0` is identical whether nothing repeats or nothing was ever examined. **`checkedRecords` is
+  the denominator, and `checkedRecords === 0` is the NOT-MEASURED state.** ⚠️ A renderer that shows
+  *"0 repeated records"* there is asserting a finding the app never made — the same defect as a
+  silently wrong number, and `test/renderer/views/repeated-api-calls.test.tsx` is what fails when
+  someone "simplifies" the two states into one.
+- **`uncheckedRecords` vs `uncheckableRecords` follows A-05's split exactly.** The second is
+  archived or vanished transcripts, which are never re-read (§5.3, ADR-034/041), so it gets its own
+  count and its own sentence.
+- ⚠️ **Neither line promises a re-sync, and that is deliberate.** A sync resumes from the stored
+  byte offset and never re-reads a committed line (§5.2 rule 3, §5.3 `GREW`); `kind: 'full'` only
+  refuses to coalesce (§4.4) and does not force a re-parse. The one path that re-parses everything
+  is the §3.18 purge, triggered solely by a change of Claude data directory (§5.1) — **there is no
+  rebuild control in the UI.** So the copy states the reach of the check honestly (*"the app does
+  not re-read transcripts it has already read"*) instead of naming a remedy the user cannot reach.
+  Advice that cannot work is worse than none (§9.4's principle, A-05's archived sentence).
+
+**All four are computed UNFILTERED**, for the same reason as the A-05 counts above.
 
 | Channel | Request | Response `data` |
 |---|---|---|
@@ -2473,6 +2626,13 @@ touching a real directory (STACK ADR-009/ADR-013).
     a failure and never a guess** — the run stays unlinked, is counted and is disclosed (§4.6).
     ⚠️ It is read **only** to fill `subagent_runs`. It sets no `origin`, no `session_id` and no
     `project_id`: rules 4–6 remain the path's answer alone (ADR-020), and no total depends on it.
+13. ⚠️ **The API call the record came from** (migration 0011): `message.id` → `events.message_id`
+    and the record's own `requestId` → `events.request_id`, **verbatim, or `NULL` when the record
+    states none — never a placeholder.** Read and stored, and that is **all**: `event_key` is still
+    rule 3's `uuid ?? '<rel_path>#<line_no>'` (ADR-019), so this changes no identity, no dedup and
+    no token sum. Several records of one assistant turn share a `message.id` while each carries its
+    own `uuid`; storing it is what lets §4.6 **count** that rather than guess at it, and the
+    arithmetic decision is deliberately deferred until it can be sized against real data.
 
 ## §5.5 SM-4 — Guarded action lifecycle
 
@@ -2647,11 +2807,11 @@ Rules:
 | Id | Metric | Definition |
 |---|---|---|
 | **M-01** | Countable population | `events` with `is_synthetic = 0`. Synthetic events are excluded from every token, cost and model statistic, and are counted in `Disclosures.syntheticEvents`. |
-| **M-02** | **Output tokens** (cost proxy) | `SUM(tok_output)` over M-01 within scope. **The primary headline number.** |
-| **M-03** | Cache reads | `SUM(tok_cache_read)`. **Never** added into a "total tokens" figure without an explicit adjacent label (HANDOFF §5). |
-| **M-04** | Token breakdown | The **five** class sums, always reported as five numbers, never one. ⚠️ **AMENDED 2026-07-22 (A-05)** — four became five: `cache_write` is the **5-minute** class and `cache_write_1h` the **1-hour** one (§2.1 "Token class"). A surface that shows a single "cache write" column is showing two differently-priced quantities added together. `tok_cache_write_1h IS NULL` (a row parsed before the split existed, §3.5) contributes **0** to the sum and **1** to §4.6's `cacheSplitUnknownEvents`; it is never reported as a known zero. |
-| **M-05** | **Cost** | `SUM over events, over the five classes, of tokens_c × rate(model, c, event.ts)`, in nanoUSD. ⚠️ An event is costed **only if every class with a non-zero count has a covering price row**; otherwise the **entire event** is uncosted and contributes nothing (INV-09). ⚠️ **AMENDED 2026-07-22 (A-05)** — the fifth class is `cache_write_1h`, priced by its own stored row (2× input on today's page; **never derived** — §1.7, ADR-024). Costing every cache write at the 5-minute rate understated the reference dataset by **$415.07**. An event with a non-zero `tok_cache_write_1h` and no covering `cache_write_1h` row is **entirely uncosted**, exactly like any other class. An event whose split is **not known** is costed with `COALESCE(tok_cache_write_1h, 0)` — reproducing the pre-A-05 arithmetic exactly, so no number moves on upgrade — and is **disclosed**, never excluded: dropping those events would erase the user's whole lifetime total the moment they upgraded. |
-| **M-06** | Uncosted summary | Count of events excluded by M-05, grouped by `model` with `MIN(ts)`/`MAX(ts)`. Rendered as *"N records uncosted (model X, date range Y)"* next to every `$` figure (INV-10). |
+| **M-02** | **Output tokens** (cost proxy) | `SUM(tok_output)` over M-01 within scope, ⚠️ **summed over the one-row-per-API-call population (ADR-042, see the ⚠️ block below the table)**, not over raw lines. **The primary headline number.** |
+| **M-03** | Cache reads | `SUM(tok_cache_read)` over the one-row-per-API-call population (ADR-042). **Never** added into a "total tokens" figure without an explicit adjacent label (HANDOFF §5). |
+| **M-04** | Token breakdown | The **five** class sums, always reported as five numbers, never one, ⚠️ **each summed over the one-row-per-API-call population (ADR-042, block below)**. ⚠️ **AMENDED 2026-07-22 (A-05)** — four became five: `cache_write` is the **5-minute** class and `cache_write_1h` the **1-hour** one (§2.1 "Token class"). A surface that shows a single "cache write" column is showing two differently-priced quantities added together. `tok_cache_write_1h IS NULL` (a row parsed before the split existed, §3.5) contributes **0** to the sum and **1** to §4.6's `cacheSplitUnknownEvents`; it is never reported as a known zero. |
+| **M-05** | **Cost** | `SUM over API CALLS, over the five classes, of tokens_c × rate(model, c, call.ts)`, in nanoUSD. ⚠️ **AMENDED 2026-07-24 (ADR-042) — the unit of summation is the API CALL, not the JSONL line** (block below): each call is costed once, at its final line's authoritative usage, so a call written as several lines is not charged N times. ⚠️ An API call is costed **only if every class with a non-zero count has a covering price row**; otherwise the **entire call** is uncosted and contributes nothing (INV-09). ⚠️ **AMENDED 2026-07-22 (A-05)** — the fifth class is `cache_write_1h`, priced by its own stored row (2× input on today's page; **never derived** — §1.7, ADR-024). Costing every cache write at the 5-minute rate understated the reference dataset by **$415.07**. A call with a non-zero `tok_cache_write_1h` and no covering `cache_write_1h` row is **entirely uncosted**, exactly like any other class. A call whose split is **not known** is costed with `COALESCE(tok_cache_write_1h, 0)` — reproducing the pre-A-05 arithmetic exactly, so no number moves on upgrade — and is **disclosed**, never excluded: dropping those calls would erase the user's whole lifetime total the moment they upgraded. |
+| **M-06** | Uncosted summary | Count of **API calls** excluded by M-05, grouped by `model` with `MIN(ts)`/`MAX(ts)`. Rendered as *"N records uncosted (model X, date range Y)"* next to every `$` figure (INV-10). ⚠️ Since ADR-042 this counts calls, not lines, so it agrees with the deduplicated M-05 population it qualifies. |
 | **M-07** | **Active time** | `SUM(MIN(ts − LAG(ts) OVER (PARTITION BY <partition> ORDER BY ts), idleGapMs))`, the **first event of each partition contributing 0**. Computed at query time (ADR-022). **Two things fully determine this metric, and both are pinned:**<br>⚠️ **(1) The event set (ADR-035):** ALL events of the partition, of **BOTH origins** — `origin IN ('main','subagent')` — merged into one timestamp-ordered stream *before* gaps are taken. Synthetic events (M-01) are excluded from token statistics but **are** included here: they are real moments in the stream.<br>⚠️ **(2) The partition (ADR-036). There are exactly three bindings, and every surface in this document uses one of them — there is no unbound case:**<br>**(A) Single session** → `PARTITION BY session_id`. Used by `SessionRow.activeSeconds`, session drill-down, the session-length histogram, `SessionSort='activeSeconds'`, and M-10.<br>**(B) Working day** → `PARTITION BY (local calendar date of ts, project_id)`. This is M-08. Used by the marathon leaderboard. ⚠️ **AMENDED 2026-07-22 (ADR-040): the second column is the *project unit* (§2.1), not the raw `events.project_id`** — the project itself unless the user has declared it the same project as another folder, in which case it is their group. The grouping is applied **where the partition is formed** (the innermost `scoped` CTE), never by summing two projects' finished results afterwards: once two folders are one project a gap between them on the same local day is an INTRA-partition gap and is capped-and-counted, and adding the two ungrouped results drops it. Fixture **F-16** pins the difference with a `not.toBe()` on the naive sum.<br>**(C) Any aggregate spanning more than one session** → **the sum of (B) over every working-day group in scope.** Not one global stream, and not a sum over sessions. Used by the Overview *Active hours* tile and by `ProjectCard.activeSeconds`. Intra-day inter-session gaps are capped at the idle threshold and **counted**, exactly like any other gap.<br>**Filter boundaries:** each partition's stream is restricted to the `GlobalFilter` window first; the first event *of the restricted stream* contributes 0, so a filter cut behaves exactly like a partition start.<br>⚠️ **(3) The unit (added 2026-07-22).** M-07 is computed **entirely in integer epoch milliseconds** — the storage unit — and converted to seconds **once**, by truncation, at the point the value leaves the repository: `activeSeconds = trunc(activeMs / 1000)`, the same rule M-09's generated `span_seconds` uses, so active time and span always agree about what a second is. **No intermediate value in the gap-and-cap arithmetic may be a floating-point number.** This is the same "compute exactly in the storage unit, convert at the edge" rule ADR-023 applies to money and §5.10's E4 amendment applies to M-20, and it is stated here because it was violated: see the amendment below §5.9.1's fixture table. |
 | **M-08** | Working day | Group events by `(local calendar date of ts, project unit)` (ADR-021; ⚠️ **unit**, not raw project — ADR-040) — this is M-07 binding **(B)**. `activeSeconds` per M-07 over that group, ⚠️ **inheriting M-07's event set exactly: both origins, merged and ordered by timestamp before gapping.** `spanSeconds` = last − first within the group; `sessions` = distinct `session_id`. A session spanning midnight contributes its events to **both** days, by each event's own local date. ⚠️ **M-08 is also the unit of aggregation for binding (C)** — every multi-session Active-hours figure in the product is a sum of M-08 values, which is what makes the Overview tile and this leaderboard agree by construction (INV-21). |
 | **M-09** | Session span | `sessions.span_seconds` = `(last_ts − first_ts)/1000`. Threshold-independent, and **partition-independent** — it reads two stored columns of one session row and never gaps anything, so M-07's bindings do not apply to it. |
@@ -2662,12 +2822,44 @@ Rules:
 | **M-14** | Runtime overlay | Per `harness_edges` row: `observed` = count of matching tool calls over the full dataset; `designed` = the edge exists in `harness_edges`. Reported as two fields (§4.5). |
 | **M-15** | File metrics | Over `file_touches`: **files touched** = `COUNT(DISTINCT path)`; **edit count** = `COUNT(*)`; **languages** = `COUNT(*) GROUP BY language`. Extension→language map is a constant table in `src/shared/language-map.ts` (`ts/tsx→TypeScript`, `js/jsx/mjs/cjs→JavaScript`, `py→Python`, `rs→Rust`, `go→Go`, `md→Markdown`, `json→JSON`, `sql→SQL`, `css→CSS`, `html→HTML`, `sh/zsh/bash→Shell`, `yml/yaml→YAML`, `toml→TOML`; anything else → `NULL`, surfaced as "other"). **Never called churn, never presented as lines changed.** |
 | **M-16** | Data coverage | `transcriptsFrom` = `MIN(events.ts)`; `promptsFrom` = `MIN(prompts.ts)`. `partialBefore` = `transcriptsFrom` when `promptsFrom < transcriptsFrom`, else `null`. Any chart bucket earlier than `partialBefore` renders with the partial-data treatment (§6.12) and **never as zero**. |
-| **M-17** | Origin split | M-02/M-04/M-11/M-12 partitioned by `events.origin`. The moment-of-value number. **`main + subagent` must equal the unpartitioned total exactly** (INV-02). |
-| **M-18** | Cache hit ratio | `tok_cache_read / (tok_cache_read + tok_input)` over M-01, as a ratio in `[0,1]`; `0` when the denominator is 0. Labelled "of input served from cache" (prototype §6.4). |
+| **M-17** | Origin split | M-02/M-04/M-11/M-12 partitioned by `events.origin`. The moment-of-value number. **`main + subagent` must equal the unpartitioned total exactly** (INV-02). ⚠️ Since ADR-042 the TOKEN parts (M-02/M-04) are summed per API call and the COUNT parts (M-11/M-12) per line; INV-02 still holds exactly for both because every line of a call shares one `origin`. |
+| **M-18** | Cache hit ratio | `tok_cache_read / (tok_cache_read + tok_input)` over M-01, ⚠️ **both sums over the one-row-per-API-call population (ADR-042)** so numerator and denominator agree with M-03/M-02, as a ratio in `[0,1]`; `0` when the denominator is 0. Labelled "of input served from cache" (prototype §6.4). |
 | **M-19** | **Deduplicated active time** ⚠️ *internal — never displayed* | The measure of the **union** of covered intervals across every partition in scope. **Covered interval:** for each partition, order its events `t₀ < t₁ < … < tₙ` (event set per ADR-035); for each `i ≥ 1` with gap `gᵢ = tᵢ − tᵢ₋₁` and cap `c = idleGapMs`, the covered interval is `Cᵢ = [tᵢ − min(gᵢ, c), tᵢ]`. Within one partition the `Cᵢ` are provably disjoint (`gᵢ > c ⇒ tᵢ − c > tᵢ₋₁`), so their measure sums to exactly M-07 — M-19 is therefore a **restatement** of M-07, not a second definition of it. **M-19 = measure(⋃ of all `Cᵢ` over all partitions in scope)**, computed by a sort-and-merge sweep over the intervals. ⚠️ **This quantity has no surface and exists only so M-20 can be computed. It must not be "optimised away": deleting it breaks INV-22 and fixture F-13.** ⚠️ **It is NOT "M-07 with one global partition"** — that reading is wrong and gives a *negative* overlap, because a coarser partition has longer gaps that the cap truncates harder (worked counterexample in ADR-037). |
 | **M-20** | **Cross-project overlap** (the disclosed quantity) | `M-20 = (M-07 binding (C) total for the scope) − (M-19 for the same scope)`, in seconds. It is the portion of the Active-hours figure attributable to two or more projects being active in the same clock interval, i.e. the double-counted part. **Exactly `0`** when no two partitions' covered intervals intersect — which includes, by construction, any scope containing **at most one project** (one partition per day, and days are disjoint). ⚠️ **AMENDED 2026-07-22 (ADR-040): "one project" means one *project unit*, so a scope containing one GROUP and nothing else also reports `0`** — a group is one project. Grouping two projects that overlapped in time therefore *reduces* M-20, correctly: what was double-counted across two partitions is now one partition's own time, counted once. M-19 itself does not move — the union is a measure of clock time and does not care how it is partitioned — so the drop appears entirely in binding (C). Fixture **F-16** asserts 15m → 0 over F-13's own fixture. Never negative (INV-22). Rendered as *"N hours of this total overlap across projects"* beside the Overview *Active hours* tile (§6.3, ADR-037). |
 
 | **M-21** | **Memory entry count** ⚠️ *originated in the build, not in the source documents* | Over one `MEMORY.md`: the number of lines whose **first non-space character is `-`, `*` or `+`, followed by whitespace and at least one non-space character** — i.e. markdown list items, at any indent. Computed by the harness scanner and stored in `harness_nodes.entry_count` (§3.10, migration `0003`); `NULL` means "not counted" and is **never** read as zero. Rendered by §6.9's memory browser **with the definition beside it** ("Entries are counted as markdown list items"). ⚠️⚠️ **This is the only metric in §5.9 that was not carried from a verified source or a user decision.** §6.9 and §4.5 both promise an "entry count" and no source document, DDL or metric defined one; E10 stated a mechanical, testable rule rather than leave a number nothing stands behind (CLAUDE.md §1). It has never been user-confirmed. A reader who disagrees should change **this row**, which is the only place the arithmetic lives. Golden case with inline hand-computed values: `test/main/harness/scan.test.ts` ("M-21 — memory entry count"). |
+
+> ⚠️⚠️ **AMENDED 2026-07-24 (ADR-042) — THE POPULATION EVERY TOKEN SUM AND COST IS TAKEN OVER:
+> ONE ROW PER API CALL, NOT ONE PER JSONL LINE.** Stated once here; M-02, M-03, M-04, M-05, M-06,
+> M-17 (token half) and M-18 all refer to it and none re-states the arithmetic.
+>
+> **The rule.** Claude Code writes one assistant API call as several JSONL lines that share one
+> `message.id`/`requestId` and repeat — or, while streaming, progressively accumulate — the same
+> `usage`. Line identity (ADR-019) is correct and each line is a real, separately-stored row, but a
+> naive `SUM(tok_*)` charges one call N times. On the reference dataset 187,870 costed rows are
+> **85,234 distinct calls**; cache-read 24.0B→12.0B, cache-write 778M→291M, output 91M→68M, and the
+> headline cost roughly halves. So every token sum and every cost is taken over the **one-row-per-call**
+> projection defined by these three clauses, applied **at query time** (storage is unchanged):
+>
+> 1. Group the M-01 population by `message_id`. (`message_id` and `request_id` are 1:1 in the data;
+>    `message_id` is the key.)
+> 2. Within a group the lines can DISAGREE (streaming: partial early, cumulative last). The
+>    authoritative usage is the **final line's** — the greatest `line_no` in the group (calls never
+>    span files). ⚠️ **Cross-check:** for cumulative-streaming usage the per-class `MAX` over the
+>    group equals the final line's values; if they ever diverge that is a finding to surface, not to
+>    average over (fixture F-17 asserts the agreement).
+> 3. Rows with `message_id IS NULL` are **each their own call** — never folded together. This keeps
+>    a record that genuinely states no id a single call, and it keeps a pre-migration database (every
+>    row NULL, ingested before the app read the field) counted line-for-line rather than silently
+>    merged. Such rows are **not deduplicated** until a rebuild fills their ids in (§3.18), which is
+>    exactly what §4.6's `repeatedApiCalls` unchecked/uncheckable counts disclose.
+>
+> **What this does NOT touch.** Only token-usage SUMS and cost. Counts of records (M-11 messages,
+> M-12 tool calls, subagent-turn counts), event MOMENTS (M-07/M-08 active time — about timestamps,
+> not usage — the M-16 coverage bounds, §6.3's calendar, §6.5's rhythm heatmap) and per-model event
+> mixes are genuinely per-line and are summed over raw `events`. The seam is one shared CTE,
+> `src/main/db/repositories/api-call-usage.ts`, so the rule lives in exactly one place (CLAUDE.md §1).
+> `event_key` and ingest are unchanged — this is not an identity change (ADR-019 stands; ADR-042).
 
 ## §5.9.1 Required golden fixtures (named, so `golden-fixture-review` has a checklist)
 
@@ -2692,6 +2884,7 @@ Every fixture below uses an **inline hand-computed expected value with the arith
 | **F-14** | **Active time on millisecond timestamps** ⚠️ **ADDED 2026-07-22 — the shape every other fixture is missing.** One project, one local day, threshold 15m: **session A** at `00:00:00.000`, `00:05:00.250`, `00:25:00.750` and **session B** at `00:40:00.500`, `00:42:00.900`, `01:00:00.900` (UTC, `TZ` pinned). Gaps: `300_250`, `1_200_500`, `899_750`, `120_400`, `1_080_000` ms. | ⚠️ **The fixture that pins the ms→seconds conversion, and the only one whose gap sums are not exact multiples of 1000.** Binding **(A)**: A = `300_250 + 900_000` = `1_200_250` ms → **1_200 s**; B = `120_400 + 900_000` = `1_020_400` ms → **1_020 s**. Binding **(B)/(C)**: `300_250 + 900_000 + 899_750 + 120_400 + 900_000` = `3_120_400` ms → **3_120 s**, span `3_600_900` ms → **3_600 s**. ⚠️ **Every fixture before this one places every event on a whole minute, so every gap sum divides exactly by 1000 and a floating-point ms→s conversion is invisible in all of them** — which is how `q:sessions` shipped broken on real data with F-01/F-11/F-12 green (§5.9 M-07's 2026-07-22 amendment). It also pins the cap's **unit**: `899_750` is 250 ms under the 15m cap and `300_250` is 250 ms over the 5m cap, so a cap compared in seconds or minutes gets both backwards. `test/metrics/f14-subsecond-active-time.test.ts`. |
 | **F-15** | **1-hour cache writes are priced separately** ⚠️ **ADDED 2026-07-22 (A-05) — and it must DISCRIMINATE.** One model at the real published Opus 4.8 rate set: `input` $5, `output` $25, `cache_write` **$6.25**, `cache_write_1h` **$10**, `cache_read` $0.5 per Mtok. Three events: `e1` 1,000,000 5-minute writes only; `e2` 1,000,000 **1-hour** writes only (deliberately the same token COUNT as `e1`); `e3` every class non-zero at once — 100,000 input, 20,000 output, 400,000 5-minute, 600,000 1-hour, 2,000,000 cache reads. | ⚠️⚠️ **A fixture that priced the two cache-write classes the SAME would pass under the old single-class model, under the new one, and under a build that swapped the two columns — it would prove nothing.** These two rates differ, so the readings disagree on a number. Hand-computed picoUSD: `e1` `1_000_000 × 6_250_000 = 6_250_000_000_000`; `e2` `1_000_000 × 10_000_000 = 10_000_000_000_000`; `e3` `500_000_000_000 + 500_000_000_000 + 2_500_000_000_000 + 6_000_000_000_000 + 1_000_000_000_000 = 10_500_000_000_000`. **Total `26_750_000_000_000` pico → `26_750_000_000` nanoUSD ($26.75).** ⚠️ The pre-A-05 reading — every cache write at the 5-minute rate — gives `20_750_000_000_000` pico → **$20.75**, and the fixture asserts that value is NOT produced. Also pins INV-09 for the new class (a non-zero 1-hour count with no covering row leaves the WHOLE event uncosted) and the not-known case (a NULL split costs exactly what it did before A-05 and is disclosed, not excluded). `test/main/pricing/a05-cache-write-1h-costing.test.ts`. |
 | **F-16** | **Two projects the user has said are the same, active on the SAME local day** ⚠️ **ADDED 2026-07-22 (ADR-040) — and it must DISCRIMINATE.** `TZ = Asia/Tokyo`, threshold 15m: `-work-demo-family-app-old` at local `09:00, 09:10, 09:20` and `-work-demo-family-app-new` at local `09:50, 10:00, 10:10`. The user groups them by name. | ⚠️⚠️ **A fixture whose two projects are active on DIFFERENT days passes under both readings and proves nothing** — the same warning F-12 carries. Ungrouped: two partitions, `10+10 = 20m` and `10+10 = 20m`, binding (C) = **40m = 2_400 s**. Grouped: ONE partition over the merged stream `09:00, 09:10, 09:20, 09:50, 10:00, 10:10` — `10 + 10 + 15(capped from 30) + 10 + 10` = **55m = 3_300 s**. The test asserts `3_300` **and** `not.toBe(2_400)`, so an implementation that grouped by summing two finished results fails. It also asserts INV-21 under the grouping (tile = sum of working-day rows), that M-20 drops to `0` and that a single-group scope reports `0` (INV-22(d)), that a purge-and-rebuild with **deliberately different `projects.id`s** leaves the group naming the same two folders (§3.19's `encoded_name` trap), that ungrouping restores seven payloads byte-identically, and that **nothing auto-suggests a grouping** over two folder names three characters apart. `test/metrics/f16-grouped-active-time.test.ts`. |
+| **F-17** | **One row per API call** ⚠️ **ADDED 2026-07-24 (ADR-042) — the fixture whose expected numbers MOVED, and it must DISCRIMINATE.** One session, parsed by the real parser so `message.id` → `message_id`: a 3-line STREAMING call `msgA` whose usage VARIES (output `10 → 40 → 90`, cache_write `0,0,20`, the last line authoritative); a 2-line repeat `msgB` (identical usage); a single-line `msgC`; two assistant records `n7`,`n8` with NO `message.id` (each its own call); and a `user` record `n0`. | ⚠️⚠️ **A fixture in which every call is a single line passes with or without the collapse and proves nothing.** 9 stored rows → **6 calls** (msgA→n3, msgB→n5, msgC→n6, n0, n7, n8); the three NULL-keyed rows stay separate. Deduped M-04: input `100+50+8+4+6 = 168`, output `90+7+5+2+3 = 107`, cache_write `20+0+3 = 23`, cache_read `1000+200 = 1200` — asserted against the NAIVE per-line sums (input `418`, output `164`) with `not.toBe`, so bypassing the seam fails. Cross-check: per-class `MAX` over `msgA` = final line n3 (`100/90/20/1000`). Cost at `$1/Mtok` all classes: deduped tokens `1210+257+16+6+9 = 1498` → `1_498_000_000` picoUSD, `costedEvents = 5` (not 8 lines). ⚠️ Per-line invariant PINNED: the M-11 message count stays `9` (8 assistant + 1 user), NOT the 6 calls — proof the collapse touches usage sums only. `test/metrics/f17-api-call-dedup.test.ts`. |
 
 ⚠️ **AMENDED 2026-07-22 (E4) — F-12's published event list did not yield its published expected
 value, and the expected value was right.**
@@ -3110,6 +3303,15 @@ version, span vs active, the five token classes (A-05), cost with disclosure, th
 histogram, and the list of subagent runs with `linked` shown honestly. ⚠️ **No message content
 anywhere** (§1.6 non-goal 1).
 
+⚠️ **AMENDED 2026-07-24 — the drawer's cost carries the FULL disclosure block §6.3 specifies, not
+just the completeness line.** This was a spec gap and it shipped as a defect: §6.12 binds the
+standing list-price caveat to every `$`, but §6.3 and §6.4 were the only sections that said so, so
+this drawer rendered a bold dollar figure captioned only *"all records costed"* — which reads as an
+assertion that the figure is a complete and correct bill. The block, in order: the **standing
+list-price line** (always, in every state including `costNanoUsd === null`, where the figure is `—`
+and there is no `$`), then the M-06 uncosted line or *"all records costed"*, then the A-05
+cache-split lines when they have anything to say.
+
 | State | Presentation |
 |---|---|
 | Loading | Table renders 8 skeleton rows at final row height. |
@@ -3205,12 +3407,36 @@ family as a wrong number.
 
 ⚠️ **The Active figure on a grouped card is M-07 binding (C) over the UNIT** — the grouping is
 applied where the partition is formed, not by adding the members' figures (ADR-040 Trap 2, fixture
-F-16). The member column is `byWorkingDayUngrouped()`, which has exactly this one caller and is
-never a surface's headline number.
+F-16). The member column is the `folders` half of `byWorkingDayViews()`, which has exactly this one
+caller and is never a surface's headline number.
 
 ⚠️ The overlap disclosure stays absent, and the proof is unchanged and now stronger: binding (C)
 restricted to one **unit** has exactly one partition per local day, so M-20 is identically `0`
 (INV-22(d)) — for a group exactly as for a lone project.
+
+⚠️ **AMENDED 2026-07-24 — the card's `$` is labelled and captioned, like every other money
+surface.** Another spec gap that shipped as a defect: the card rendered a bare `formatCost(...)`
+under the sparkline, with **no label at all**, among four labelled siblings. A number with no
+answer to "what is this" is §1a's failure, and an unframed dollar figure is §6.3's.
+
+- The figure takes the **same `<dt>/<dd>` label its siblings take**, reading **`Cost`**, and is
+  rendered in **every** state — `—` when nothing is costed (§6.4: no `$` at all, never `$0.00`), so
+  the card cannot change height as data arrives.
+- Beneath it, in the same caption slot the Active metric uses for its idle-gap note, the
+  **standing list-price line** §6.3 specifies, verbatim.
+- ⚠️ **Only that line, not the full block** — and the reason is stated so it is not "completed"
+  later. The block runs to three-to-five lines; repeated down a 3-column grid of cards it would be
+  more caveat than card, and §6.8's loading row promises skeleton cards at final height. The
+  standing line is the only unconditionally-true one, so it is the only one that must be on every
+  card. The data-dependent lines are **not** dropped: the M-06 uncosted line renders once beneath
+  the grid (INV-10, already specified), and the full block renders in the project-detail drawer
+  that a card click opens — one click, and no screen, away.
+
+⚠️ **The rule §6.12 states — a disclosure adjacent to every `$` — is enumerated and tested in
+`test/renderer/views/list-price-disclosure.test.tsx`, which names all five money surfaces**
+(§6.3 tile, §6.4 panel, §6.5 session drawer, §6.8 card, §6.8 project-detail drawer). That suite
+previously imported two views and therefore defended two views, which is how three surfaces
+drifted. A sixth money surface added without its caveat fails there.
 
 | State | Presentation |
 |---|---|
@@ -3266,6 +3492,19 @@ Max-width 720 px, stacked cards, per the prototype plus the §1.7 additions:
    this are removed from active time." ⚠️ Plus, explicitly: "This does not change session boundaries."
 3. **Theme** — System / Dark / Light.
 4. **Re-sync data** — incremental refresh with the last-sync time and duration.
+4a. **Read your transcripts again from the start** *(new 2026-07-24, A-16)* — the `sync:rebuild`
+   control (§4.4): throw away everything derived and re-parse every transcript from line 1, so a
+   record ingested before the app learned to notice something gets noticed. Sits beside the
+   incremental *Re-sync* it is the heavy opposite of; **not a ninth nav item** (§6.2 locks eight).
+   ⚠️ **Explicit and two-step** — the button opens a confirm ("Read every transcript again from the
+   beginning? Nothing in your Claude data directory is changed or deleted."), never one click
+   (ADR-032). While it runs it shows **plain-words** progress (never a phase name — §1a) and a
+   **Stop**; anything already re-read stays read (§5.2 rules 3–4). The card, in plain words (§1a):
+   what it does, what is **kept** (price table, settings, archives, the audit trail, project
+   groups — none come from transcripts), and — in its own paragraph, never a footnote — **what it
+   can never reach**: archived and vanished transcripts are never re-read, so whatever the app did
+   not record for them the first time stays unknown, and this cannot bring it back. A refusal
+   states plainly that nothing was cleared and nothing started.
 5. **Pricing** *(new)* — the price table: model · token class · USD per 1M · effective from · to ·
    source. Every row editable; effective dates editable; add/delete row; **Reset to bundled seed**.
    Above it, the models-observed list (`pricing:models`) with unpriced models called out. Below it,
@@ -3352,7 +3591,9 @@ that path would take `price_rows` and `audit_log` with it (ADR-026).
   **Data-dependent** — M-06 uncosted records, M-20 cross-project overlap, A-05's cache-split
   counts, M-16's partial-data caption: each renders only when it has something to say. §6.3's
   reasoning governs: on the 3-second glance surface "a reassurance nobody asked for is noise."
-  **Standing** — the list-price caveat on every `$` figure (§6.3, §6.4): true of the number in
+  **Standing** — the list-price caveat on every `$` figure (§6.3, §6.4, §6.5, §6.8 — ⚠️ *every*
+  one of the five money surfaces, enumerated in §6.8 and asserted surface-by-surface in
+  `test/renderer/views/list-price-disclosure.test.tsx`): true of the number in
   every state, under every filter, so it renders in **every** state, including the states where
   the number itself is absent. ⚠️ A standing caveat must **not** be given the data-dependent rule
   "for consistency": there is no data that makes it untrue, so there is no state in which
@@ -3450,11 +3691,15 @@ instructions** (§3.10, HANDOFF §9).
 `harness-forge` must write **`perf-profiling = yes`** back into `STACK.md`'s gate manifest and author
 the gate against the numbers below. A `DEFERRED` row must not survive into the built harness.
 
+> ⚠️ **Status 2026-07-24: NOT done.** The manifest row was flipped to `yes`, but the gate and the
+> `scripts/perf/*.mjs` harness described below were never authored — measurement has been ad-hoc.
+> The targets in this section stand as the specification for when the gate is actually built.
+
 **Reference dataset**, used for every measurement here: ~1 GB across 2,064 `.jsonl` files, 236,030
 records (`docs/source/HANDOFF.md` §4 — verified, do not re-derive). **Reference machine:** the
-developer's macOS arm64 laptop on battery-neutral power. Every target is measured by
-`scripts/perf/*.mjs` against a generated synthetic dataset of the same shape and scale — never against
-personal data (§7.8).
+developer's macOS arm64 laptop on battery-neutral power. Every target is **to be** measured by
+`scripts/perf/*.mjs` (not yet built — see the status note above) against a generated synthetic dataset
+of the same shape and scale — never against personal data (§7.8).
 
 ## §8.1 How each number is measured
 
@@ -4737,9 +4982,12 @@ left to be rediscovered:
   overlap; a scope containing one group and nothing else reports overlap **`0`** by INV-22(d),
   because a group is one project. F-16 asserts the drop over F-13's own fixture: 15m → 0.
 
-⚠️ A **second, differently-partitioned** reading of M-07 exists and has exactly one caller:
-`ActiveTimeRepository.byWorkingDayUngrouped()`, which computes each folder's own active time for
-§6.8's member list. **It is not a surface's number and it never sums to the group's.** §6.8 states
+⚠️ A **second, differently-partitioned** reading of M-07 exists and has exactly one caller: the
+`folders` half of `ActiveTimeRepository.byWorkingDayViews()`, which computes each folder's own
+active time for §6.8's member list. It is computed only over the folders the user actually grouped,
+because for every other folder the two partitions are the same partition and the unit row already
+*is* the folder row — a de-duplication of work, never of meaning.
+**It is not a surface's number and it never sums to the group's.** §6.8 states
 that on screen, in plain words, beside the list — because two columns of numbers that look like
 they should add up and do not are a defect of the same family as a wrong number (CLAUDE.md §1a).
 
@@ -4849,6 +5097,54 @@ they should add up and do not are a defect of the same family as a wrong number 
 - **Revisit if:** the user asks for compaction-dropped messages to be retained too (option (a),
   §11.10), or for a way to bulk-forget retained-orphan history — either would be a deliberate new
   decision, not a tweak.
+
+### ADR-042 — Token and cost totals sum one row per API call, deduplicated at query time  [LOCKED 2026-07-24]
+
+**Status:** LOCKED · **Date:** 2026-07-24 · **Deciders:** the user, explicitly
+
+- **Decision:** every token-usage SUM and every cost in §5.9 (M-02, M-03, M-04, M-05, M-06, the token
+  half of M-17, and M-18) is taken over a **one-row-per-API-call** projection of `events`, not over
+  raw JSONL lines. The projection: **(1)** group the M-01 population by `message_id`; **(2)** within a
+  group the authoritative usage is the **final line's** — greatest `line_no`, calls never spanning
+  files — because streaming lines carry partial-then-cumulative usage and an arbitrary line is wrong;
+  **(3)** rows with `message_id IS NULL` are **each their own call**, never folded. It is computed
+  **entirely at query time**, in one shared CTE (`src/main/db/repositories/api-call-usage.ts`) that
+  every summing query reads instead of `events`; a covering index is added by
+  **migration 0012-api-call-dedup-index.sql** (0001–0011 immutable, ADR-007). ⚠️ **Storage is
+  unchanged. `event_key` and ingest (`ON CONFLICT DO NOTHING`) are untouched (ADR-019 stands): each
+  line is still its own row, and a rebuild reproduces them byte-for-byte and recomputes the dedup.**
+  Counts of records (M-11 messages, M-12 tool calls, subagent-turn counts) and event moments (M-07/M-08
+  active time, M-16 coverage, the §6.3/§6.5 calendars) are per-line and are **not** deduplicated.
+- **Because:** migration 0011 measured the effect it could no longer be sized by intuition (CLAUDE.md
+  §1): on the reference dataset **187,870 costed rows are 85,234 distinct calls** — cache-read
+  24.0B→12.0B, cache-write 778M→291M, output 91M→68M, and the headline cost roughly halves. A total
+  that charges one API call N times is a silently wrong number, the project's defining failure, and it
+  is now provably large. Summing per call, at the final line's usage, is the arithmetic that matches
+  what the provider actually billed. **Query-time, not storage:** doing it in the fact table would
+  fight ADR-019's line identity, make a rebuild non-idempotent, and bake a decision into bytes that a
+  future correction could not revisit; a CTE keeps the raw records — which §4.6's disclosure still
+  reports on — and lets the rule live in exactly one place (CLAUDE.md §1's "every metric defined once").
+- **Rejected:** *Deduplicating in `events` at ingest (drop all but the final line)* — destroys the
+  per-line records §4.6 discloses, makes `event_key`/ADR-019 a half-truth, and turns a rebuild into a
+  lossy operation; the whole point of RETAINED/rebuild invariance (ADR-033, F-04) is that nothing is
+  silently dropped. *Picking `MAX` per class instead of the final line* — equal to the final line for
+  cumulative streaming (the cross-check F-17 pins), but it would silently paper over a non-monotonic
+  disagreement that the design wants surfaced as a finding, not averaged. *Choosing an arbitrary line*
+  — wrong by construction: 45,895 of 85,234 calls vary across their lines. *Folding `message_id IS NULL`
+  rows together* — would collapse unrelated calls and, worse, silently shrink a pre-migration database
+  (every row NULL) the instant it upgraded; each NULL row stays its own call until a rebuild fills the
+  ids in, which §4.6 discloses as the unchecked/uncheckable population.
+- **Constrains:** §3.5, §5.9 M-02/M-03/M-04/M-05/M-06/M-17/M-18, §4.6 (the `repeatedApiCalls`
+  disclosure wording), INV-02 (still exact — a call's lines share one origin), the
+  `golden-fixture-review` gate; migration `0012-api-call-dedup-index.sql`;
+  `src/main/db/repositories/api-call-usage.ts` (the seam) and the summing queries in `cost.ts`,
+  `event-stats.ts`, `session-stats.ts`, `project-stats.ts`, `graph-stats.ts`; fixture **F-17**.
+- **Read with:** **ADR-019** (line identity, which this does NOT change), **ADR-023** (the picoUSD
+  cost path it feeds), **ADR-027** (query-time aggregation only — this is exactly that), and migration
+  **0011** (which measured the effect and deferred the decision to here).
+- **Revisit if:** Claude Code stops repeating `usage` across a call's lines (the dedup becomes a
+  no-op but harmless), or a case appears where the final line is NOT authoritative — either is a
+  deliberate new decision, and F-17's cross-check is the tripwire that would catch the latter.
 
 ---
 
@@ -5075,7 +5371,7 @@ mechanically; the rest are dispatched gates from `STACK.md`'s manifest.
 | `dependency-security-audit` | `pnpm audit --omit=dev` clean of high/critical (P-35). |
 | `golden-fixture-review` | **Every story adding or changing a parser path, a metric definition, or a costing rule lands a fixture with a hand-computed inline expected value.** The named checklist is **§5.9.1 F-01…F-11**, and in particular: **F-01** active time across a subagent run (pins ADR-035 — a main-loop-only fixture proves nothing), **F-02** subagent roll-up (INV-02), **F-03** incremental == cold parse (INV-04), **F-04** archive survives re-sync *and* purge-and-rebuild (INV-18), **F-08/F-09** costing across a price change and with no applicable price row, **F-10** rate precision at `$0.3125/Mtok` (ADR-023 as amended), **F-12** aggregate active time across two sessions in one day (pins ADR-036's binding (C) and INV-21 — a one-session-per-day fixture proves nothing), **F-13** cross-project overlap in both the non-zero and zero cases (pins ADR-037, M-19/M-20 and INV-22 — a fixture whose overlap is incidentally zero proves nothing)., **F-14** active time on millisecond timestamps (pins M-07's unit clause — every other fixture places every event on a whole minute, so none of them can see a ms→seconds conversion bug). |
 | `guarded-action-review` | Every story touching `src/main/actions/**` demonstrates, with a test: confirm → **backup before mutate** → undo → audit entry; the backup-root exclusion from Bloat Radar, analytics and the watcher (INV-14); and that **nothing is ever auto-deleted, including backups**. For **ACT-07** additionally: the restore point is a verified move manifest (INV-07), a session's transcript and `subagents/` never split across roots (INV-20), `archiveRoot` is never inside or a parent of `claudeDir` (INV-19), **no metric changes across the archive** (INV-18), and **nothing under the archive root is ever deleted by the app**. |
-| `perf-profiling` | ⚠️ **Resolved by §8 to `yes`.** Targets **P-01…P-37** (35 in §8.2–§8.7 plus P-36/P-37 for ACT-07 archiving) are measurable and failable. **`harness-forge` must write `yes` back into `STACK.md`'s manifest table** — a `DEFERRED` row must not survive into the built harness. P-08 (200 ms) is the DuckDB trigger; P-13/P-14/P-15 are the nine-hour steady-state targets that the always-open trigger makes load-bearing. |
+| `perf-profiling` | ⚠️ **Specified by §8; gate NOT yet built (status 2026-07-24).** Targets **P-01…P-37** (35 in §8.2–§8.7 plus P-36/P-37 for ACT-07 archiving) are measurable and failable, but no `scripts/perf/` harness or `.claude/skills/perf-profiling/` gate exists yet — measurement has been ad-hoc. P-08 (200 ms) is the DuckDB trigger; P-13/P-14/P-15 are the nine-hour steady-state targets that the always-open trigger makes load-bearing. |
 | `e2e-smoke` | `pnpm run e2e` at epic boundaries: the app launches, onboarding accepts a fixture directory, a sync completes, **all eight views navigate and render** without an error boundary or console error, and the theme toggle flips `data-theme`. Read-only by construction — it never invokes a guarded action. **Fails loudly; never skips.** |
 | `release-runbook` | A **cold clone on a machine with no prior state** runs `pnpm install && pnpm run check` green, plus one `pnpm run e2e` run. Authored from STACK ADR-016 + ADR-006 — **not** a substituted deployment template; there is no deploy target. |
 

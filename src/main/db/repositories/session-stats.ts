@@ -15,6 +15,7 @@
 // the filtered event window: §5.9 says it "reads two stored columns of one session row and never
 // gaps anything", so a filter narrows which sessions appear, not how long each one was.
 
+import { API_CALL_ROWS_CTE } from './api-call-usage';
 import { Repository, sumToSafeNumber } from './base';
 import { ActiveTimeRepository, CAPPED_GAP_MS, SESSION_PARTITION, gappedCte } from './active-time';
 import { costToWire, CostRepository } from './cost';
@@ -192,7 +193,15 @@ interface SessionRecord {
  * kind in the database an inner join passes.
  */
 function sessionAggregateSql(eventWhere: string, toolWhere: string): string {
-  return `WITH ${PROJECT_UNIT_CTE},
+  // ⚠️ ADR-042 — TWO scoped populations now. `scoped` is raw `events` and feeds ACTIVE TIME (M-07,
+  // about timestamps, unchanged), the MESSAGE count (M-11, a per-line count, unchanged) and the
+  // per-session model mix. `scoped_calls` is the deduped one-row-per-call population (`api_call_rows`)
+  // and feeds the TOKEN sums only. ⚠️ Bind order gains a second copy of `eventWhere`'s params, right
+  // after the first: [scoped-eventWhere, scoped_calls-eventWhere, idleGapMs, toolWhere]. Both callers
+  // bind it. INV-02 is preserved: every line of a call shares one session, so the deduped per-session
+  // sums still roll up to the deduped grand total.
+  return `WITH ${API_CALL_ROWS_CTE},
+${PROJECT_UNIT_CTE},
 scoped AS (
   SELECT e.id, e.session_id, e.ts, e.role, e.model,
          e.is_synthetic, e.tok_input, e.tok_output, e.tok_cache_write,
@@ -203,18 +212,30 @@ scoped AS (
   FROM   events e
   WHERE  1 = 1${eventWhere}
 ),
+scoped_calls AS (
+  SELECT e.session_id, e.is_synthetic,
+         e.tok_input, e.tok_output, e.tok_cache_write,
+         COALESCE(e.tok_cache_write_1h, 0) AS tok_cache_write_1h,
+         e.tok_cache_read
+  FROM   api_call_rows e
+  WHERE  1 = 1${eventWhere}
+),
 ${gappedCte(SESSION_PARTITION)},
 active AS (
   SELECT session_id, COALESCE(SUM(${CAPPED_GAP_MS}), 0) / 1000 AS active_seconds
   FROM   gapped GROUP BY session_id
 ),
-totals AS (
+token_totals AS (
   SELECT session_id,
          COALESCE(SUM(CASE WHEN is_synthetic = 0 THEN tok_input       ELSE 0 END), 0) AS tok_input,
          COALESCE(SUM(CASE WHEN is_synthetic = 0 THEN tok_output      ELSE 0 END), 0) AS tok_output,
          COALESCE(SUM(CASE WHEN is_synthetic = 0 THEN tok_cache_write ELSE 0 END), 0) AS tok_cache_write,
          COALESCE(SUM(CASE WHEN is_synthetic = 0 THEN tok_cache_write_1h ELSE 0 END), 0) AS tok_cache_write_1h,
-         COALESCE(SUM(CASE WHEN is_synthetic = 0 THEN tok_cache_read  ELSE 0 END), 0) AS tok_cache_read,
+         COALESCE(SUM(CASE WHEN is_synthetic = 0 THEN tok_cache_read  ELSE 0 END), 0) AS tok_cache_read
+  FROM   scoped_calls GROUP BY session_id
+),
+msg_totals AS (
+  SELECT session_id,
          COALESCE(SUM(CASE WHEN is_synthetic = 0 AND role IN ('assistant','user')
                            THEN 1 ELSE 0 END), 0)                                     AS messages
   FROM   scoped GROUP BY session_id
@@ -244,10 +265,10 @@ SELECT s.id            AS id,
        s.last_ts       AS last_ts,
        s.span_seconds  AS span_seconds,
        a.active_seconds                              AS active_seconds,
-       t.messages                                    AS messages,
+       mt.messages                                   AS messages,
        COALESCE(tl.tool_calls, 0)                    AS tool_calls,
        COALESCE(rn.subagent_runs, 0)                 AS subagent_runs,
-       t.tok_input, t.tok_output, t.tok_cache_write, t.tok_cache_write_1h, t.tok_cache_read,
+       tk.tok_input, tk.tok_output, tk.tok_cache_write, tk.tok_cache_write_1h, tk.tok_cache_read,
        s.is_partial    AS is_partial,
        s.archive_id    AS archive_id,
        ar.archive_root AS archive_root
@@ -255,7 +276,8 @@ FROM   active a
 JOIN   sessions s ON s.id = a.session_id
 JOIN   projects p ON p.id = s.project_id
 JOIN   project_unit u ON u.project_id = s.project_id
-JOIN   totals   t ON t.session_id = a.session_id
+JOIN   token_totals tk ON tk.session_id = a.session_id
+JOIN   msg_totals   mt ON mt.session_id = a.session_id
 LEFT JOIN tools tl ON tl.session_id = a.session_id
 LEFT JOIN runs  rn ON rn.session_id = a.session_id
 LEFT JOIN archives ar ON ar.id = s.archive_id`;
@@ -294,7 +316,11 @@ export class SessionStatsRepository extends Repository {
     const order = dir === 'asc' ? 'ASC' : 'DESC';
     const comparison = dir === 'asc' ? '>' : '<';
 
+    // ⚠️ ADR-042 — `eventScope.params` is bound TWICE: once for `scoped` (raw events, active time
+    // and messages) and once for `scoped_calls` (deduped, token sums). Order matches the CTE order
+    // in `sessionAggregateSql`: [scoped, scoped_calls, idleGapMs, tools].
     const params: SqlParam[] = [
+      ...eventScope.params,
       ...eventScope.params,
       context.idleGapMinutes * 60_000,
       ...toolScope.params,
@@ -327,8 +353,11 @@ export class SessionStatsRepository extends Repository {
 
   /** §4.5 `q:sessionDetail` — one session, whole; the channel takes no `GlobalFilter`. */
   sessionRow(sessionId: string, idleGapMinutes: number): SessionAggregateRow | undefined {
+    // ⚠️ ADR-042 — `e.session_id = ?` now appears twice in the SQL (scoped, then scoped_calls), so
+    // `sessionId` is bound twice before the idle gap. See `sessionAggregateSql`'s bind-order note.
     const record = this.one<SessionRecord>(
       sessionAggregateSql('\n    AND e.session_id = ?', '\n    AND t.session_id = ?'),
+      sessionId,
       sessionId,
       idleGapMinutes * 60_000,
       sessionId,
@@ -361,13 +390,16 @@ export class SessionStatsRepository extends Repository {
       readonly tok_cache_write_1h: number | bigint | null;
       readonly tok_cache_read: number | bigint | null;
     }>(
-      `SELECT e.origin AS origin,
+      // ⚠️ ADR-042 — token SUM per origin, so `api_call_rows` (one row per call). INV-02 holds:
+      // a call's lines share one origin, so main + subagent equals the deduped session total.
+      `WITH ${API_CALL_ROWS_CTE}
+       SELECT e.origin AS origin,
               COALESCE(SUM(e.tok_input), 0)       AS tok_input,
               COALESCE(SUM(e.tok_output), 0)      AS tok_output,
               COALESCE(SUM(e.tok_cache_write), 0) AS tok_cache_write,
               COALESCE(SUM(COALESCE(e.tok_cache_write_1h, 0)), 0) AS tok_cache_write_1h,
               COALESCE(SUM(e.tok_cache_read), 0)  AS tok_cache_read
-       FROM   events e
+       FROM   api_call_rows e
        WHERE  e.is_synthetic = 0 AND e.session_id = ?
        GROUP BY e.origin`,
       sessionId,
@@ -416,7 +448,11 @@ export class SessionStatsRepository extends Repository {
       readonly tok_cache_write_1h: number | bigint | null;
       readonly tok_cache_read: number | bigint | null;
     }>(
-      `SELECT r.id AS id, r.subagent_type AS subagent_type, r.description AS description,
+      // ⚠️ ADR-042 — per-run token SUMS, so the join is to `api_call_rows` (one row per call). The
+      // representative row keeps `subagent_run_id`, so the linkage is unchanged; the per-run numbers
+      // now sum to the deduped subagent-origin total, consistent with `originTokens`.
+      `WITH ${API_CALL_ROWS_CTE}
+       SELECT r.id AS id, r.subagent_type AS subagent_type, r.description AS description,
               r.first_ts AS first_ts, r.last_ts AS last_ts,
               CASE WHEN r.spawn_event_id IS NULL THEN 0 ELSE 1 END AS linked,
               COALESCE(SUM(CASE WHEN e.is_synthetic = 0 THEN e.tok_input       END), 0) AS tok_input,
@@ -425,7 +461,7 @@ export class SessionStatsRepository extends Repository {
               COALESCE(SUM(CASE WHEN e.is_synthetic = 0 THEN COALESCE(e.tok_cache_write_1h, 0) END), 0) AS tok_cache_write_1h,
               COALESCE(SUM(CASE WHEN e.is_synthetic = 0 THEN e.tok_cache_read  END), 0) AS tok_cache_read
        FROM   subagent_runs r
-       LEFT JOIN events e ON e.subagent_run_id = r.id
+       LEFT JOIN api_call_rows e ON e.subagent_run_id = r.id
        WHERE  r.session_id = ?
        GROUP BY r.id
        ORDER BY r.first_ts, r.id`,
@@ -551,28 +587,47 @@ export class SessionStatsRepository extends Repository {
       readonly cache_read_tokens: number | bigint | null;
       readonly output_tokens: number | bigint | null;
     }>(
-      `WITH ${PROJECT_UNIT_CTE},
+      // ⚠️ ADR-042 — the TWO token sums (`output_tokens`, `cache_read_tokens`) come from the deduped
+      // `api_call_rows` population; the MOMENTS (`MIN`/`MAX(ts)`) and the subagent-TURN count stay
+      // over raw `events` (timestamps and a row count are per-line, unchanged). Bind order: the scope
+      // params bind once for `scoped` and once for `scoped_calls`, then the two `LIMIT`s.
+      `WITH ${API_CALL_ROWS_CTE},
+       ${PROJECT_UNIT_CTE},
        scoped AS (
-         SELECT e.session_id AS session_id, e.ts AS ts, e.role AS role, e.origin AS origin,
-                e.tok_output AS tok_output, e.tok_cache_read AS tok_cache_read
+         SELECT e.session_id AS session_id, e.ts AS ts, e.role AS role, e.origin AS origin
          FROM   events e
          WHERE  e.is_synthetic = 0${scope.sql}
        ),
-       per_session AS (
+       scoped_calls AS (
+         SELECT e.session_id AS session_id,
+                e.tok_output AS tok_output, e.tok_cache_read AS tok_cache_read
+         FROM   api_call_rows e
+         WHERE  e.is_synthetic = 0${scope.sql}
+       ),
+       call_tokens AS (
          SELECT session_id,
-                MIN(ts)                             AS started_at,
+                COALESCE(SUM(tok_output), 0)     AS output_tokens,
+                COALESCE(SUM(tok_cache_read), 0) AS cache_read_tokens
+         FROM   scoped_calls
+         GROUP BY session_id
+       ),
+       per_session AS (
+         SELECT sc.session_id                    AS session_id,
+                MIN(sc.ts)                        AS started_at,
                 -- A-12 — the session's last recorded activity, both origins. The renderer alone
                 -- compares it to the wall clock for the presentational "live"/"recent" signal
                 -- (written nowhere, fed to no metric, §1).
-                MAX(ts)                             AS last_activity_ts,
-                COALESCE(SUM(tok_output), 0)        AS output_tokens,
-                COALESCE(SUM(tok_cache_read), 0)    AS cache_read_tokens,
+                MAX(sc.ts)                        AS last_activity_ts,
+                COALESCE(ct.output_tokens, 0)     AS output_tokens,
+                COALESCE(ct.cache_read_tokens, 0) AS cache_read_tokens,
                 -- A-12 — assistant turns a subagent ran, EXCLUDED from the main-context trajectory
                 -- below but disclosed honestly (§4.6). A subagent runs a separate context (ADR-020).
-                COALESCE(SUM(CASE WHEN origin = 'subagent' AND role = 'assistant'
+                -- A per-line turn COUNT, so it stays over raw events (ADR-042 leaves counts alone).
+                COALESCE(SUM(CASE WHEN sc.origin = 'subagent' AND sc.role = 'assistant'
                                   THEN 1 ELSE 0 END), 0)              AS subagent_turns
-         FROM   scoped
-         GROUP BY session_id
+         FROM   scoped sc
+         LEFT   JOIN call_tokens ct ON ct.session_id = sc.session_id
+         GROUP BY sc.session_id
        ),
        -- A-12 — the two capped sets, then their UNION. No "now" appears anywhere: "recent" is the
        -- most recently active by MAX(ts), a deterministic ordering, NOT a wall-clock window.
@@ -599,6 +654,7 @@ export class SessionStatsRepository extends Repository {
        JOIN   sessions s      ON s.id = ps.session_id
        JOIN   project_unit u  ON u.project_id = s.project_id
        ORDER BY ps.cache_read_tokens DESC, ps.session_id ASC`,
+      ...scope.params,
       ...scope.params,
       limit,
       limit,
@@ -650,11 +706,16 @@ export class SessionStatsRepository extends Repository {
       readonly context: number | bigint | null;
       readonly output: number | bigint | null;
     }>(
-      `SELECT e.session_id AS session_id,
+      // ⚠️ ADR-042 — one row per TURN = one API call, so `api_call_rows` (the final line's
+      // authoritative usage). This is the fix the "context size per turn" series most needed: a
+      // streamed turn used to appear as several rows with partial-then-cumulative context; now each
+      // turn is one point at its true context size. The final line carries role='assistant'.
+      `WITH ${API_CALL_ROWS_CTE}
+       SELECT e.session_id AS session_id,
               COALESCE(e.tok_input, 0) + COALESCE(e.tok_cache_read, 0)
                 + COALESCE(e.tok_cache_write, 0) + COALESCE(e.tok_cache_write_1h, 0) AS context,
               COALESCE(e.tok_output, 0) AS output
-       FROM   events e
+       FROM   api_call_rows e
        WHERE  e.is_synthetic = 0 AND e.origin = 'main' AND e.role = 'assistant'
               AND e.session_id IN (${placeholders})${scope.sql}
        ORDER BY e.session_id, e.ts, e.id`,

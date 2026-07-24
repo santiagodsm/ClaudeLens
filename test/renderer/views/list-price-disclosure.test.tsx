@@ -1,5 +1,5 @@
 /**
- * The standing list-price caveat, on both `$` surfaces (approved 2026-07-22; §6.12, §6.2).
+ * The standing list-price caveat, on **every** `$` surface (approved 2026-07-22; §6.12, §6.2).
  *
  * §5.9 M-05 costs usage against `price_rows`, which hold **published API list rates**. A Claude
  * subscription is not billed that way, so a lifetime total presented bare invites exactly one
@@ -11,12 +11,22 @@
  * it is true of every `$` the app will ever show, so it is present in every state — which is also
  * the testable form of "it does not push layout around" (§6.2). A line that is always there
  * cannot appear, disappear, or move anything when data arrives.
+ *
+ * ⚠️⚠️ **AMENDED — this suite used to import only `OverviewView` and `TokensView`, and that is
+ * exactly why three surfaces drifted.** §6.12 binds the caveat to every `$`, but a suite that
+ * only knows two screens can only defend two screens: the session drawer shipped a bold figure
+ * captioned only "all records costed", and a project card shipped a bare `$` with no label at
+ * all. The enumeration below is now the point of the file — `MONEY_SURFACES` names every screen
+ * in the application that renders a `$`, each with the setup that gets it on screen, so a new
+ * money surface added without its caveat fails here rather than reaching a user.
  */
 
 import { afterEach, describe, expect, it } from 'vitest';
-import { act, cleanup, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, screen, within } from '@testing-library/react';
 import { OverviewView } from '../../../src/renderer/views/OverviewView';
 import { TokensView } from '../../../src/renderer/views/TokensView';
+import { SessionsView } from '../../../src/renderer/views/SessionsView';
+import { ProjectsView } from '../../../src/renderer/views/ProjectsView';
 import { useAppStore } from '../../../src/renderer/store/app-store';
 import {
   CACHE_SPLIT_ARCHIVED_SENTENCE,
@@ -30,11 +40,19 @@ import {
   cacheEfficiency,
   contextOverhead,
   costBreakdown,
+  fileMetrics,
   modelTimeline,
   originSplit,
   overviewTiles,
+  projectCard,
+  projectCards,
+  rhythmHeatmap,
+  sessionDetail,
+  sessionHistogram,
+  sessionsPage,
   tokensByProject,
   uncosted,
+  workingDays,
 } from './payloads';
 
 afterEach(() => {
@@ -56,6 +74,10 @@ const NOTHING_TO_DISCLOSE: Disclosures = {
   cacheSplitMismatches: 0,
   retainedOrphanSessions: 0,
   retainedOrphanEvents: 0,
+  // Migration 0011 — ⚠️ `checkedRecords: 0` means NOTHING HAS BEEN CHECKED, not "no repeats".
+  // Suites that want the quiet state must set `checkedRecords` above zero; see
+  // `test/renderer/views/repeated-api-calls.test.tsx` for the distinction this pins.
+  repeatedApiCalls: { records: 0, checkedRecords: 0, uncheckedRecords: 0, uncheckableRecords: 0 },
 };
 
 function seedDisclosures(overrides: Partial<Disclosures> = {}): void {
@@ -83,6 +105,201 @@ function tokensStubs(overrides: Partial<Record<string, () => unknown>> = {}) {
     ...overrides,
   } as Parameters<typeof renderView>[1];
 }
+
+function sessionsStubs(overrides: Partial<Record<string, () => unknown>> = {}) {
+  return {
+    'q:sessionHistogram': () => ok(sessionHistogram()),
+    'q:rhythmHeatmap': () => ok(rhythmHeatmap()),
+    'q:workingDays': () => ok(workingDays()),
+    'q:sessions': () => ok(sessionsPage()),
+    'q:sessionDetail': () => ok(sessionDetail()),
+    ...overrides,
+  } as Parameters<typeof renderView>[1];
+}
+
+function projectsStubs(overrides: Partial<Record<string, () => unknown>> = {}) {
+  return {
+    'q:projectCards': () => ok(projectCards()),
+    'q:fileMetrics': () => ok(fileMetrics()),
+    ...overrides,
+  } as Parameters<typeof renderView>[1];
+}
+
+/**
+ * ⚠️ **The enumeration is the test.** Every screen in this application that renders a `$`, with
+ * the least setup that puts its figure on screen, and the two states §6.12 cares about: the
+ * ordinary one and the one where **nothing is costed at all** — the state a data-dependent
+ * implementation would most plausibly have dropped the caveat in, since there is no `$` left to
+ * qualify. Adding a money surface without adding it here is the drift this file failed to catch
+ * once already.
+ */
+interface MoneySurface {
+  /** Plain name, so a failure says which screen, not which index. */
+  readonly name: string;
+  /** Renders the view and drives whatever click is needed, then resolves once the `$` is up. */
+  readonly show: (unpriced: boolean) => Promise<HTMLElement>;
+}
+
+const MONEY_SURFACES: readonly MoneySurface[] = [
+  {
+    name: '§6.3 Overview — the Cost tile',
+    show: async (unpriced) => {
+      renderView(
+        <OverviewView />,
+        overviewStubs(unpriced ? overviewTiles({ costNanoUsd: null }) : overviewTiles()),
+      );
+      return screen.findByTestId('tile-cost');
+    },
+  },
+  {
+    name: '§6.4 Tokens & Cost — the Cost panel',
+    show: async (unpriced) => {
+      renderView(
+        <TokensView />,
+        tokensStubs(
+          unpriced
+            ? { 'q:costBreakdown': () => ok(costBreakdown({ rows: [], uncosted: uncosted(12) })) }
+            : {},
+        ),
+      );
+      return screen.findByTestId('tokens-cost-panel');
+    },
+  },
+  {
+    name: '§6.5 Sessions & Time — the session drawer',
+    show: async (unpriced) => {
+      renderView(
+        <SessionsView />,
+        sessionsStubs(
+          unpriced ? { 'q:sessionDetail': () => ok(sessionDetail({ costNanoUsd: null })) } : {},
+        ),
+      );
+      const rows = await screen.findAllByTestId('sessions-table-row');
+      fireEvent.click(rows[0]!);
+      return screen.findByTestId('session-drawer');
+    },
+  },
+  {
+    name: '§6.8 Projects & Code — a project card',
+    show: async (unpriced) => {
+      renderView(
+        <ProjectsView />,
+        projectsStubs(
+          unpriced
+            ? {
+                'q:projectCards': () =>
+                  ok(projectCards({ rows: [projectCard({ costNanoUsd: null })] })),
+              }
+            : {},
+        ),
+      );
+      return screen.findByTestId('project-card');
+    },
+  },
+  {
+    name: '§6.8 Projects & Code — the project-detail drawer',
+    show: async (unpriced) => {
+      renderView(
+        <ProjectsView />,
+        projectsStubs(
+          unpriced
+            ? {
+                'q:projectCards': () =>
+                  ok(projectCards({ rows: [projectCard({ costNanoUsd: null })] })),
+              }
+            : {},
+        ),
+      );
+      fireEvent.click(await screen.findByTestId('project-card-open'));
+      return screen.findByTestId('project-detail-drawer');
+    },
+  },
+];
+
+describe('⚠️ the standing list-price caveat sits beside EVERY $ in the application (§6.12)', () => {
+  for (const surface of MONEY_SURFACES) {
+    it(`${surface.name} — carries it, adjacent and never in a tooltip`, async () => {
+      const region = await surface.show(false);
+      expect(within(region).getByTestId('list-price-disclosure')).toHaveTextContent(
+        LIST_PRICE_SENTENCE,
+      );
+      // §6.12 — "never in a tooltip". Nothing on the surface hides the sentence behind hover.
+      expect(within(region).getByTestId('list-price-disclosure')).not.toHaveAttribute('title');
+    });
+
+    it(`${surface.name} — keeps it when nothing is costed and there is no $ to qualify`, async () => {
+      const region = await surface.show(true);
+      expect(within(region).getByTestId('list-price-disclosure')).toBeInTheDocument();
+    });
+  }
+
+  it('⚠️ names every money surface — the count is the guard against a sixth one drifting', () => {
+    // A deliberately brittle assertion. If a screen starts rendering a `$`, this number moves,
+    // and the person moving it has to add the surface above rather than only bump the count.
+    expect(MONEY_SURFACES).toHaveLength(5);
+  });
+});
+
+describe('§6.8 — the project card labels its $ like its siblings (§1a)', () => {
+  it('gives the figure a label and the caveat, so the card answers "what is this number"', async () => {
+    renderView(<ProjectsView />, projectsStubs());
+    const card = await screen.findByTestId('project-card');
+
+    // The number is no longer an unlabelled string floating under the sparkline.
+    const figure = within(card).getByTestId('project-card-cost');
+    expect(figure).toHaveTextContent('$4.50');
+    const term = within(card).getByText('Cost');
+    expect(term.tagName).toBe('DT');
+    // Its siblings are labelled the same way, in the same element pair.
+    for (const label of ['Sessions', 'Output', 'Tool calls', 'Active']) {
+      expect(within(card).getByText(label).tagName).toBe('DT');
+    }
+    expect(within(card).getByTestId('list-price-disclosure')).toBeInTheDocument();
+  });
+
+  it('⚠️ shows the label, the caveat and an em dash — never $0.00 — when nothing is costed', async () => {
+    renderView(
+      <ProjectsView />,
+      projectsStubs({
+        'q:projectCards': () => ok(projectCards({ rows: [projectCard({ costNanoUsd: null })] })),
+      }),
+    );
+    const card = await screen.findByTestId('project-card');
+    expect(within(card).getByTestId('project-card-cost')).toHaveTextContent('—');
+    expect(card.textContent ?? '').not.toContain('$0.00');
+    expect(within(card).getByTestId('list-price-disclosure')).toBeInTheDocument();
+  });
+});
+
+describe('§6.5 — the session drawer gets the whole block, not just the cost line', () => {
+  it('⚠️ no longer captions a bold $ with "all records costed" alone', async () => {
+    renderView(<SessionsView />, sessionsStubs());
+    const rows = await screen.findAllByTestId('sessions-table-row');
+    fireEvent.click(rows[0]!);
+    const drawer = await screen.findByTestId('session-drawer');
+
+    const disclosure = within(drawer).getByTestId('drawer-cost-disclosure');
+    // Both lines, in order: the standing caveat FIRST, then the data-dependent completeness line.
+    expect(within(disclosure).getByTestId('list-price-disclosure')).toBeInTheDocument();
+    expect(within(disclosure).getByTestId('all-costed-disclosure')).toBeInTheDocument();
+    const text = disclosure.textContent ?? '';
+    expect(text.indexOf(LIST_PRICE_SENTENCE)).toBeLessThan(text.indexOf('all records costed'));
+  });
+
+  it('carries the A-05 cache-split lines too, because it now shares the one block', async () => {
+    renderView(<SessionsView />, sessionsStubs());
+    const rows = await screen.findAllByTestId('sessions-table-row');
+    fireEvent.click(rows[0]!);
+    await screen.findByTestId('session-drawer');
+    seedDisclosures({ cacheSplitArchivedEvents: 2 });
+
+    expect(
+      within(screen.getByTestId('drawer-cost-disclosure')).getByTestId(
+        'cache-split-archived-disclosure',
+      ),
+    ).toHaveTextContent('2 records');
+  });
+});
 
 describe('the list-price caveat — §6.3 Overview Cost tile', () => {
   it('renders adjacent to the figure, in flow, and never as a tooltip', async () => {

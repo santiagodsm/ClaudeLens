@@ -490,6 +490,67 @@ export class DatasetService {
     return this.#cycle?.cancel() ?? this.syncState();
   }
 
+  /**
+   * §4.4 `sync:rebuild` — **the explicit rebuild §3.18 has always named** ("Purge (`claudeDir`
+   * changed, **or an explicit rebuild**)"), and which §6.11's FATAL screen already offers as
+   * *Rebuild derived data*. Until A-16 nothing in the running app could trigger it, so a line
+   * committed under an older build was never read again: incremental sync resumes from
+   * `byte_offset` (§5.2 rule 3, §5.3 `GREW`) and `kind: 'full'` only refuses to coalesce (§4.4).
+   *
+   * This is the SAME pair §5.1's fingerprint-changed row runs, in the same order and with no new
+   * machinery: `purge()` then one `kind: 'full'` cycle. The purge is §3.18's statement list, which
+   * audits itself before executing a statement — DERIVED only, both RETAINED markers guarded
+   * (ADR-033/041, INV-18), no USER table named (INV-12, ADR-026).
+   *
+   * ⚠️ **Not a guarded action** (§5.7, ADR-032). ACT-01…07 is a closed catalogue of actions that
+   * mutate the user's filesystem, and each backs up what it is about to destroy (§5.5 rule 1).
+   * This writes no file, moves no file and destroys nothing that has another source: every row it
+   * deletes is re-derived from transcripts it never opens for writing. A restore point would hold
+   * a copy of data the transcripts already hold, so there is nothing to back up and no `audit_log`
+   * row to write — the same reasoning that keeps the §5.1 purge out of the catalogue.
+   *
+   * ⚠️ **User-initiated only, never automatic** (ADR-032: "no automatic recovery, ever"). Nothing
+   * calls this on a schedule, on a failure, on a migration or on a gap in the data.
+   *
+   * ⚠️ **Refuses while a cycle is running.** The purge deletes the manifest rows that cycle is
+   * writing offsets into, so this is `E_SYNC_BUSY` — the same answer §4.4 gives `kind: 'full'`
+   * mid-cycle, and for a stricter version of the same reason.
+   */
+  rebuildDerived(): SyncState {
+    const claudeDir = this.#claudeDir;
+    if (claudeDir === null) {
+      throw new HandlerError('E_NO_DIR', 'No Claude data directory is configured yet.');
+    }
+    if (this.#cycle?.busy() === true) {
+      throw new HandlerError(
+        'E_SYNC_BUSY',
+        'A sync is already running. Wait for it to finish, or stop it, then try again.',
+        { retryable: true },
+      );
+    }
+
+    const outcome = purge(this.#deps.db);
+    // ⚠️ Re-asserted immediately, not left to the cycle. `purge()` empties `meta` wholesale
+    // (§3.18), and a rebuild that failed or was cancelled before `#recordSyncCompletion` ran would
+    // otherwise leave no fingerprint at all — so the NEXT launch would read §5.1's
+    // fingerprint-CHANGED row and purge a second time. The directory has not changed; saying so
+    // is the honest state.
+    this.meta.set('claudeDirFingerprint', claudeDirFingerprint(claudeDir), this.#now());
+    this.#deps.logger.info('an explicit rebuild was requested; DERIVED data purged', {
+      rowsDeleted: outcome.totalDeleted,
+    });
+
+    // §5.1 — the state the purge row lands in. The first cycle that ingests an event moves it back
+    // to READY (`#onDataChanged`). A FATAL or NO_DIR dataset never reaches here.
+    if (this.#state === 'READY') this.#state = 'READY_EMPTY';
+    // ⚠️ §4.8 — the purge empties `harness_nodes`, `harness_edges`, `harness_run_agents` and
+    // `bloat_flags` too, and only the first-sync-after-ready hook rebuilds them. Without this
+    // re-arm the rebuild would leave the Harness Map and Bloat Radar permanently empty with no
+    // error anywhere — a whole screen silently reading zero.
+    this.#firstSyncAfterReadyPending = true;
+    return this.startSync('full');
+  }
+
   /** Resolves when no cycle is running. Tests await it; production never needs to. */
   async settled(): Promise<void> {
     await this.#cycle?.settled();
@@ -863,6 +924,8 @@ function idleSyncState(meta: MetaRepository): SyncState {
     filesTotal: 0,
     filesDone: 0,
     recordsIngested: 0,
+    // ADR-019 — this cycle's already-present-record count, and there is no cycle yet.
+    recordsDeduplicated: 0,
     // This cycle's bad-line count, and there is no cycle: 0 is the fact, not a placeholder.
     // The dataset-wide total is `meta.badLineTotal`, disclosed through §4.6, never here.
     badLines: 0,

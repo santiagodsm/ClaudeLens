@@ -15,8 +15,9 @@
 // ⚠️ M-15 is "**never called churn, never presented as lines changed**". `edits` is a count of
 // write-class tool calls (ADR-028); no diff is read and none exists to read.
 
+import { API_CALL_ROWS_CTE } from './api-call-usage';
 import { Repository, sumToSafeNumber } from './base';
-import { ActiveTimeRepository } from './active-time';
+import { ActiveTimeRepository, type WorkingDayGroup } from './active-time';
 import { costToWire, CostRepository } from './cost';
 import { PROJECT_UNIT_CTE, ProjectGroupsRepository } from './project-groups';
 import { scopeClause, type QueryContext } from './scope';
@@ -108,11 +109,16 @@ export class ProjectStatsRepository extends Repository {
    */
   projectCards(context: QueryContext): ProjectCardRow[] {
     const costs = this.#projectCosts(context);
-    const activity = this.#activeSecondsByUnit(context);
+    // ⚠️ ONE call, not two. The card's own active time and its members' active times are the same
+    // working-day computation read two ways, and `byWorkingDayViews` only re-runs the part that
+    // genuinely differs — the folders the user grouped. Asking for them separately scanned every
+    // event in scope twice to produce rows that are, for every ungrouped folder, identical.
+    const active = this.#active.byWorkingDayViews(context);
+    const activity = sumSecondsByProject(active.units);
     const sessions = this.#countByUnit(context, 'e.session_id', 'events');
     const tools = this.#countByUnit(context, null, 'tool_calls');
     const sparklines = this.#editSparklines(context);
-    const members = this.#memberRows(context);
+    const members = this.#memberRows(context, active.folders);
     const names = this.#groups.unitNames();
     return this.#projectTokenRows(context).map((row) => ({
       ...row,
@@ -208,11 +214,14 @@ export class ProjectStatsRepository extends Repository {
       readonly color_index: number;
       readonly output_tokens: number | bigint | null;
     }>(
-      `WITH ${PROJECT_UNIT_CTE}
+      // ⚠️ ADR-042 — `api_call_rows`: M-02 per unit sums each call once. The seam binds no params,
+      // so `PROJECT_UNIT_CTE`, the join and the scope clause are unchanged.
+      `WITH ${API_CALL_ROWS_CTE},
+       ${PROJECT_UNIT_CTE}
        SELECT u.unit_id AS project_id, u.unit_name AS display_name,
               u.unit_encoded_name AS encoded_name, u.unit_color_index AS color_index,
               COALESCE(SUM(e.tok_output), 0) AS output_tokens
-       FROM   events e
+       FROM   api_call_rows e
        JOIN   project_unit u ON u.project_id = e.project_id
        WHERE  e.is_synthetic = 0${scope.sql}
        GROUP BY u.unit_id
@@ -226,20 +235,6 @@ export class ProjectStatsRepository extends Repository {
       outputTokens: sumToSafeNumber(row.output_tokens, 'outputTokens'),
       costNanoUsd: null,
     }));
-  }
-
-  /**
-   * M-07 binding (C), per unit — the sum of that unit's M-08 groups (INV-21).
-   *
-   * ⚠️ `byWorkingDay()` already partitions by `(local day, unit)` (ADR-040), so this is a sum of
-   * that unit's own groups and **not** an addition of two projects' finished results.
-   */
-  #activeSecondsByUnit(context: QueryContext): Map<number, number> {
-    const totals = new Map<number, number>();
-    for (const group of this.#active.byWorkingDay(context)) {
-      totals.set(group.projectId, (totals.get(group.projectId) ?? 0) + group.activeSeconds);
-    }
-    return totals;
   }
 
   #projectCosts(context: QueryContext): Map<number, number | null> {
@@ -288,10 +283,16 @@ export class ProjectStatsRepository extends Repository {
    * two folders makes the gaps between them on a shared day intra-partition gaps, which are
    * capped and counted (ADR-040). Presenting them as summands would be a silently wrong number.
    */
-  #memberRows(context: QueryContext): Map<number, ProjectMemberRow[]> {
+  #memberRows(
+    context: QueryContext,
+    folderDays: readonly WorkingDayGroup[],
+  ): Map<number, ProjectMemberRow[]> {
     const scope = scopeClause(context.filter, 'e');
     const toolScope = scopeClause(context.filter, 't');
-    const params: SqlParam[] = [...scope.params, ...toolScope.params];
+    // ⚠️ ADR-042 — the token SUM is over `api_call_rows` (one row per call), the session COUNT over
+    // raw `events` (a distinct-session count is per-line and unchanged). Two event-scoped CTEs now,
+    // so `scope.params` is bound TWICE: bind order is [tokens-scope, sessions-scope, tools-scope].
+    const params: SqlParam[] = [...scope.params, ...scope.params, ...toolScope.params];
     const rows = this.all<{
       readonly unit_id: number;
       readonly project_id: number;
@@ -302,11 +303,18 @@ export class ProjectStatsRepository extends Repository {
       readonly sessions: number;
       readonly tool_calls: number;
     }>(
-      `WITH ${PROJECT_UNIT_CTE},
-       per_project AS (
+      `WITH ${API_CALL_ROWS_CTE},
+       ${PROJECT_UNIT_CTE},
+       per_project_tokens AS (
          SELECT e.project_id AS project_id,
                 COALESCE(SUM(CASE WHEN e.is_synthetic = 0 THEN e.tok_output ELSE 0 END), 0)
-                  AS output_tokens,
+                  AS output_tokens
+         FROM   api_call_rows e
+         WHERE  1 = 1${scope.sql}
+         GROUP BY e.project_id
+       ),
+       per_project_sessions AS (
+         SELECT e.project_id AS project_id,
                 COUNT(DISTINCT e.session_id) AS sessions
          FROM   events e
          WHERE  1 = 1${scope.sql}
@@ -320,25 +328,22 @@ export class ProjectStatsRepository extends Repository {
        )
        SELECT u.unit_id AS unit_id, p.id AS project_id, p.display_name AS display_name,
               p.encoded_name AS encoded_name, p.color_index AS color_index,
-              COALESCE(pp.output_tokens, 0) AS output_tokens,
-              COALESCE(pp.sessions, 0)      AS sessions,
-              COALESCE(pt.tool_calls, 0)    AS tool_calls
+              COALESCE(ptk.output_tokens, 0) AS output_tokens,
+              COALESCE(pps.sessions, 0)      AS sessions,
+              COALESCE(pt.tool_calls, 0)     AS tool_calls
        FROM   projects p
        JOIN   project_unit u ON u.project_id = p.id
-       LEFT   JOIN per_project pp ON pp.project_id = p.id
+       LEFT   JOIN per_project_tokens ptk ON ptk.project_id = p.id
+       LEFT   JOIN per_project_sessions pps ON pps.project_id = p.id
        LEFT   JOIN per_project_tools pt ON pt.project_id = p.id
-       WHERE  pp.project_id IS NOT NULL OR pt.project_id IS NOT NULL
+       -- Existence is "had any event or tool call in scope": the SESSION side, per-line, is the
+       -- population test (a project with events but zero output tokens must still appear).
+       WHERE  pps.project_id IS NOT NULL OR pt.project_id IS NOT NULL
        ORDER BY u.unit_id, output_tokens DESC, p.encoded_name ASC`,
       ...params,
     );
 
-    const activeByProject = new Map<number, number>();
-    for (const group of this.#active.byWorkingDayUngrouped(context)) {
-      activeByProject.set(
-        group.projectId,
-        (activeByProject.get(group.projectId) ?? 0) + group.activeSeconds,
-      );
-    }
+    const activeByProject = sumSecondsByProject(folderDays);
 
     const map = new Map<number, ProjectMemberRow[]>();
     for (const row of rows) {
@@ -397,4 +402,20 @@ export class ProjectStatsRepository extends Repository {
     }
     return map;
   }
+}
+
+/**
+ * M-07 binding (C) restricted to each id in `days` — the sum of that id's M-08 groups (INV-21).
+ *
+ * ⚠️ The rows are already partitioned by `(local day, id)`, so this is a sum of one partition's
+ * own groups and **not** an addition of two projects' finished results (ADR-040). ⚠️ Written once
+ * because it is applied to BOTH readings — the unit rows for the card, the folder rows for its
+ * members — and two copies is how one of them ends up summing the wrong partitioning.
+ */
+function sumSecondsByProject(days: readonly WorkingDayGroup[]): Map<number, number> {
+  const totals = new Map<number, number>();
+  for (const group of days) {
+    totals.set(group.projectId, (totals.get(group.projectId) ?? 0) + group.activeSeconds);
+  }
+  return totals;
 }

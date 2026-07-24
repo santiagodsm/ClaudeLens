@@ -431,6 +431,18 @@ describe('§4.5 / §4.6 — every q:* channel returns its contract shape over re
       // ADR-041 — no file has vanished in this fixture, so nothing is retained-orphan.
       retainedOrphanSessions: 0,
       retainedOrphanEvents: 0,
+      // Migration 0011 — ⚠️ hand-checked, and the pair is the point. `f02-rollup` is parsed by
+      // THIS build into a database created at schema 11, so its `file_manifest` watermark is 0
+      // and every usable record is examined: 4 costable events (§5.9 M-01 minus the zero-token
+      // ones) → `checkedRecords: 4`. `records: 0` therefore means "checked all four, none shares
+      // an API call", NOT "not measured" — which is exactly the distinction the count exists to
+      // make, and which `checkedRecords: 4` beside it is what proves.
+      repeatedApiCalls: {
+        records: 0,
+        checkedRecords: 4,
+        uncheckedRecords: 0,
+        uncheckableRecords: 0,
+      },
     });
 
     // `q:uncosted` is the same summary, from the same query.

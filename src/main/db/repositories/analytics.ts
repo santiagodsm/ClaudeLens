@@ -767,6 +767,10 @@ export class AnalyticsRepository {
     // ADR-041 — UNFILTERED, like the A-05 counts: a property of the stored dataset, so a date
     // range that excluded the orphaned sessions must not make the caveat vanish (INV-13-style).
     const retainedOrphans = this.#events.retainedOrphanCoverage();
+    // Migration 0011 — UNFILTERED for the same reason as the two above. ⚠️ Four numbers, because
+    // the count alone cannot be read: "none found" and "not checked" are different facts and
+    // `checkedRecords` is what tells them apart (see `apiCallCoverage`).
+    const apiCalls = this.#events.apiCallCoverage();
     return {
       uncosted: this.#uncostedSummary(context.filter),
       badLines: this.#events.badLines(),
@@ -784,6 +788,12 @@ export class AnalyticsRepository {
       // ADR-041 — "N sessions kept from files no longer in your Claude folder."
       retainedOrphanSessions: retainedOrphans.sessions,
       retainedOrphanEvents: retainedOrphans.events,
+      repeatedApiCalls: {
+        records: apiCalls.repeatedRecords,
+        checkedRecords: apiCalls.checkedRecords,
+        uncheckedRecords: apiCalls.uncheckedRecords,
+        uncheckableRecords: apiCalls.uncheckableRecords,
+      },
     };
   }
 

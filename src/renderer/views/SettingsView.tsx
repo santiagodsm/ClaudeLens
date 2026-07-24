@@ -25,6 +25,7 @@ import type {
   ProjectGroups,
   Result,
   SettingsSnapshot,
+  SyncPhase,
   ThemePreference,
   TokenClass,
 } from '../../shared/ipc-contract';
@@ -126,6 +127,9 @@ export function SettingsView(): JSX.Element {
         <EfficiencyThresholdCard />
         <ThemeCard />
         <ResyncCard />
+        {/* A-16 / §3.18 — the explicit rebuild, beside the incremental re-sync it is the opposite
+            of. Placed here rather than on its own screen: §6.2 locks eight nav items. */}
+        <RereadCard />
         <PricingCard />
         {/* ADR-040 — grouped projects sit with the other things the user decided themselves. */}
         <SameProjectsCard />
@@ -489,6 +493,165 @@ function ResyncCard(): JSX.Element {
           Re-sync now
         </button>
       </div>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 4a — Read transcripts again from the start (A-16, §3.18's "explicit rebuild")
+// ---------------------------------------------------------------------------
+
+/**
+ * ⚠️ **Every sentence below is the contract of this control, and §1a is binding on all of them.**
+ * No `message.id`, no column name, no section number, no `ACT-xx` — this button re-reads files,
+ * and the copy says that in the words someone who has never opened `DESIGN.md` would use.
+ *
+ * ⚠️ The one sentence that must never be dropped for brevity is `REREAD_CANNOT_REACH`. Archived
+ * transcripts (§5.3 `ARCHIVED`, ADR-034) and vanished ones (`retained_orphan = 1`, ADR-041) are
+ * never re-parsed, by design, so a rebuild reaches everything except them. A card that implied a
+ * clean sweep would be promising a remedy that cannot work for part of the data — exactly the
+ * mistake A-05's archived cache-split sentence exists to avoid.
+ */
+export const REREAD_WHAT_IT_DOES =
+  'Claude Lens normally reads only what is new at the end of each transcript, so a line it read once is never looked at again. This reads every transcript from the beginning.';
+export const REREAD_WHY =
+  'Worth doing when Claude Lens has learned to notice something it was not recording when it first read your history — the answers on the other screens are rebuilt from the files, so what it can now see, it sees everywhere.';
+export const REREAD_WHAT_IS_KEPT =
+  'Your price table, your settings, the record of what you have archived, the history of actions you have taken and the projects you have told Claude Lens are the same are all kept — none of them come from your transcripts.';
+export const REREAD_CANNOT_REACH =
+  'Transcripts you have archived, and transcripts that have disappeared from your Claude data directory, are never re-read. Their history is kept exactly as it is, and whatever Claude Lens did not record the first time stays unknown for them — this cannot bring it back.';
+export const REREAD_COST =
+  'This takes about as long as the very first scan did. You can keep using the app while it runs, and you can stop it at any time — anything already read again stays read.';
+/** The second step. ⚠️ Explicit and user-initiated; nothing in the app ever decides this (ADR-032). */
+export const REREAD_CONFIRM_QUESTION =
+  'Read every transcript again from the beginning? Nothing in your Claude data directory is changed or deleted.';
+
+/** Plain words for each phase of a running cycle (§1a — never the phase name itself). */
+function syncPhaseWords(phase: SyncPhase): string {
+  switch (phase) {
+    case 'scanning':
+      return 'Looking through your Claude data directory';
+    case 'parsing':
+      return 'Reading transcripts';
+    case 'finalizing':
+      return 'Finishing up';
+    case 'cancelling':
+      return 'Stopping';
+    default:
+      return 'Working';
+  }
+}
+
+function RereadCard(): JSX.Element {
+  const sync = useAppStore((state) => state.sync);
+  const rereadEverything = useAppStore((state) => state.rereadEverything);
+  const applySync = useAppStore((state) => state.applySync);
+  const [confirming, setConfirming] = useState(false);
+  const [error, setError] = useState<AppError | null>(null);
+  const running = sync !== null && sync.phase !== 'idle' && sync.phase !== 'failed';
+
+  return (
+    <Card id="reread" title="Read your transcripts again from the start">
+      <p className="text-small text-text-muted" data-testid="reread-what">
+        {REREAD_WHAT_IT_DOES}
+      </p>
+      <p className="text-small text-text-muted" data-testid="reread-why">
+        {REREAD_WHY}
+      </p>
+      <p className="text-small text-text-muted" data-testid="reread-kept">
+        {REREAD_WHAT_IS_KEPT}
+      </p>
+      {/* ⚠️ The honest limit, in its own paragraph so it cannot be skimmed past as a footnote. */}
+      <p className="text-small text-text-muted" data-testid="reread-cannot-reach">
+        {REREAD_CANNOT_REACH}
+      </p>
+      <p className="text-small text-text-muted" data-testid="reread-cost">
+        {REREAD_COST}
+      </p>
+
+      {running ? (
+        <div className="flex flex-wrap items-center gap-3">
+          <span
+            role="status"
+            className="flex items-center gap-2 text-small text-text-primary"
+            data-testid="reread-progress"
+          >
+            <Spinner />
+            {syncPhaseWords(sync.phase)}
+            {/* ⚠️ A file count only once there is one. `0 of 0` during SCANNING would be a
+                fabricated denominator for a total nobody has counted yet (CLAUDE.md §1). */}
+            {sync.filesTotal > 0 &&
+              ` — ${formatInteger(sync.filesDone)} of ${formatInteger(sync.filesTotal)} files`}
+          </span>
+          <button
+            type="button"
+            data-testid="reread-stop"
+            onClick={() => {
+              void (async () => {
+                const result = await invoke('sync:cancel');
+                // §5.2 — already-committed files stay committed and the manifest stays consistent
+                // with them; nothing is rolled back. The next sync picks up from there.
+                if (result.ok) applySync(result.data);
+              })();
+            }}
+            className="rounded-control border border-border px-3 py-2 text-small text-text-primary transition-colors duration-hover hover:bg-bg-surface-2"
+          >
+            Stop
+          </button>
+        </div>
+      ) : confirming ? (
+        <div className="flex flex-col gap-2" data-testid="reread-confirm">
+          <p className="text-small text-text-primary">{REREAD_CONFIRM_QUESTION}</p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              data-testid="reread-confirm-yes"
+              onClick={() => {
+                void (async () => {
+                  setConfirming(false);
+                  setError(await rereadEverything());
+                })();
+              }}
+              className="rounded-control border border-border px-3 py-2 text-small text-text-primary transition-colors duration-hover hover:bg-bg-surface-2"
+            >
+              Yes, read them again
+            </button>
+            <button
+              type="button"
+              data-testid="reread-confirm-no"
+              onClick={() => {
+                setConfirming(false);
+              }}
+              className="rounded-control px-3 py-2 text-small text-text-muted transition-colors duration-hover hover:text-text-primary"
+            >
+              Leave things as they are
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div>
+          <button
+            type="button"
+            data-testid="settings-reread"
+            onClick={() => {
+              setError(null);
+              setConfirming(true);
+            }}
+            className="rounded-control border border-border px-3 py-2 text-small text-text-primary transition-colors duration-hover hover:bg-bg-surface-2"
+          >
+            Read everything again
+          </button>
+        </div>
+      )}
+
+      {error !== null && (
+        // §6.10 — inline, under the control that failed. ⚠️ A refusal means NOTHING was deleted
+        // and no re-read started, and the sentence has to say so; the user has just been told the
+        // app is about to clear its answers.
+        <p role="status" className="text-small text-danger" data-testid="reread-error">
+          {error.message} Nothing was cleared and nothing has started.
+        </p>
+      )}
     </Card>
   );
 }

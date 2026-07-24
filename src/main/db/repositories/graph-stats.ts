@@ -12,6 +12,7 @@
 // ⚠️ §5.9 M-14 keeps `designed` and `observed` as two fields: "`designed: false, observed > 0` is
 // a legal and interesting state". Nothing here collapses them.
 
+import { API_CALL_ROWS_CTE } from './api-call-usage';
 import { Repository, sumToSafeNumber } from './base';
 import { PROJECT_UNIT_CTE } from './project-groups';
 import { scopeClause, type QueryContext } from './scope';
@@ -573,11 +574,13 @@ export class GraphStatsRepository extends Repository {
       // user's absolute home path and username (§7.8 / P-33). Two ungrouped projects that share a
       // display name merge into one band here, which is acceptable and consistent with §3.3
       // treating the display name as cosmetic; leaking the path is not.
-      `WITH ${PROJECT_UNIT_CTE}
+      // ⚠️ ADR-042 — the flow value is a token SUM, so it reads `api_call_rows` (one row per call).
+      `WITH ${API_CALL_ROWS_CTE},
+       ${PROJECT_UNIT_CTE}
        SELECT 'project:' || u.unit_name AS source,
               'model:' || e.model AS target,
               COALESCE(SUM(e.tok_output), 0) AS value
-       FROM   events e
+       FROM   api_call_rows e
        JOIN   project_unit u ON u.project_id = e.project_id
        WHERE  e.is_synthetic = 0 AND e.model IS NOT NULL AND e.tok_output > 0${scope.sql}
        GROUP BY source, target`,
@@ -588,12 +591,15 @@ export class GraphStatsRepository extends Repository {
       readonly target: string;
       readonly value: number | bigint;
     }>(
-      `SELECT 'model:' || e.model AS source,
+      // ⚠️ ADR-042 — token SUM, so `api_call_rows`. The tool lookup keys on the representative
+      // (final-line) `e.id`, which is the same event the deduped usage is attributed to.
+      `WITH ${API_CALL_ROWS_CTE}
+       SELECT 'model:' || e.model AS source,
               'tool:' || COALESCE((SELECT tc.tool_name FROM tool_calls tc
                                     WHERE tc.event_id = e.id ORDER BY tc.ordinal LIMIT 1),
                                   '(no tool)') AS target,
               COALESCE(SUM(e.tok_output), 0) AS value
-       FROM   events e
+       FROM   api_call_rows e
        WHERE  e.is_synthetic = 0 AND e.model IS NOT NULL AND e.tok_output > 0${scope.sql}
        GROUP BY source, target`,
       ...scope.params,

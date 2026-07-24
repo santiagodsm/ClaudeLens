@@ -55,6 +55,7 @@ const IDLE_STATE: SyncState = {
   filesTotal: 0,
   filesDone: 0,
   recordsIngested: 0,
+  recordsDeduplicated: 0,
   badLines: 0,
   queuedRescan: false,
   lastCompletedAt: null,
@@ -122,6 +123,19 @@ export class SyncCycle {
   /** Resolves when no cycle is running. Tests await it; production never needs to. */
   async settled(): Promise<void> {
     while (this.#running !== null) await this.#running;
+  }
+
+  /**
+   * Whether a cycle is in flight — the same fact `start()` branches on, exposed so a caller can
+   * ask BEFORE it acts rather than after (A-16).
+   *
+   * ⚠️ The one caller is the explicit rebuild (§3.18), and it must ask first: the purge deletes
+   * the very `file_manifest` rows a running cycle is holding ids for and writing offsets into, so
+   * "purge, then discover the cycle refused to start" would leave the dataset half-erased with
+   * nothing rebuilding it. `start('full')` reports busy only after the fact.
+   */
+  busy(): boolean {
+    return this.#running !== null;
   }
 
   // -------------------------------------------------------------------------------------
@@ -214,6 +228,10 @@ export class SyncCycle {
         ...this.#state,
         filesDone: done,
         recordsIngested: this.#state.recordsIngested + result.recordsIngested,
+        // ADR-019 — the same record offered twice, stored once. ⚠️ NOT the repeated-API-call
+        // count (§4.6, migration 0011): that one is several distinct records sharing one call,
+        // which `event_key` correctly does not treat as duplicates.
+        recordsDeduplicated: this.#state.recordsDeduplicated + result.recordsDeduplicated,
         badLines: this.#state.badLines + result.badLinesDelta,
       };
       this.#emitProgress();

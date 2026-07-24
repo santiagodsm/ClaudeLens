@@ -45,6 +45,19 @@ export interface ScanPhaseResult {
 export interface FileParseResult {
   readonly relPath: string;
   readonly recordsIngested: number;
+  /**
+   * ADR-019 in action: records this file offered that were ALREADY present under the same
+   * `event_key`, so the `ON CONFLICT DO NOTHING` fired and nothing was written twice.
+   *
+   * ⚠️ **This is not the repeated-API-call count and must never be presented as one** (§4.6,
+   * migration 0011). This is line identity working: the same record, seen twice, stored once. The
+   * other thing is several genuinely distinct records that share one API call and are each summed
+   * — which `event_key` correctly does not catch, because they are not duplicates.
+   *
+   * ⚠️ It is a per-CYCLE number, not a property of the dataset, which is why it lives on
+   * `SyncState` (§4.4) rather than in `Disclosures` (§4.6).
+   */
+  readonly recordsDeduplicated: number;
   readonly badLinesDelta: number;
   readonly cancelled: boolean;
 }
@@ -131,6 +144,9 @@ export function createSyncWork(deps: SyncEngineDeps): SyncWork {
       return {
         relPath: result.relPath,
         recordsIngested: result.recordsIngested,
+        // Previously discarded here. `ingestFile` has always computed it, and a counter that is
+        // computed and dropped is a counter nobody can check (CLAUDE.md §1's spirit).
+        recordsDeduplicated: result.recordsDeduplicated,
         badLinesDelta: result.badLines - file.startBadLines,
         cancelled: result.cancelled,
       };

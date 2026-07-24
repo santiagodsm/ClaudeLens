@@ -75,6 +75,16 @@ export interface ParsedEvent {
   readonly encodedProject: string;
   readonly uuid: string | null;
   readonly parentUuid: string | null;
+  /**
+   * §5.4 rule 13 (migration 0011) — `message.id`, the API call this record came from. Several
+   * records of one assistant turn share it while each keeps its own `uuid`.
+   *
+   * ⚠️ **Not part of event identity.** `eventKey` above is unchanged (ADR-019) and nothing keys,
+   * dedups or merges on this. `null` when the record states none — never a placeholder.
+   */
+  readonly messageId: string | null;
+  /** §5.4 rule 13 — the record's own `requestId`, verbatim. `null` when absent. */
+  readonly requestId: string | null;
   /** §5.4 rule 4 — stored, but NOT the origin decision. The path is (ADR-020). */
   readonly isSidechain: boolean;
   readonly model: string | null;

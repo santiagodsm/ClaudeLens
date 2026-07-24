@@ -104,8 +104,15 @@ const DELETE_EVENTS_OF_FILE = 'DELETE FROM events WHERE source_file_id = ?';
 const DELETE_PROMPTS_OF_FILE = 'DELETE FROM prompts WHERE source_file_id = ?';
 const DELETE_STATS_OF_FILE = 'DELETE FROM stats_cache_days WHERE source_file_id = ?';
 const DELETE_RUNS_OF_FILE = 'DELETE FROM subagent_runs WHERE transcript_file_id = ?';
+// ⚠️ `api_ids_from_line = 0` belongs in this list for the same reason `bad_lines` does (migration
+// 0011). The watermark counts LEADING lines of this file whose records were ingested before the
+// app read API-call ids; a SHRANK/REWROTE re-parse re-reads the file from line 1 with a build that
+// does read them, so none of its lines are behind the boundary any more. Leaving the old value
+// here would make the §4.6 count report freshly-checked records as "not checked" — an
+// understatement, but still a number that does not mean what it says.
 const RESET_OFFSET = `UPDATE file_manifest
-      SET byte_offset = 0, lines_parsed = 0, bad_lines = 0, cache_split_mismatches = 0
+      SET byte_offset = 0, lines_parsed = 0, bad_lines = 0, cache_split_mismatches = 0,
+          api_ids_from_line = 0
     WHERE id = ?`;
 
 /**

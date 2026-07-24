@@ -15,6 +15,7 @@ import type { RenderResult } from '@testing-library/react';
 import type {
   AppBootstrap,
   AppError,
+  Disclosures,
   IpcChannel,
   PushChannel,
   PushListener,
@@ -94,6 +95,29 @@ export const DEFAULT_SETTINGS: SettingsSnapshot = {
   efficiencyDropThreshold: 0.4, // A-12
 };
 
+/**
+ * A booted shell with nothing to disclose. Non-zero cases are driven per test.
+ *
+ * ⚠️ Migration 0011 — `repeatedApiCalls.checkedRecords: 0` is the "nothing has been checked"
+ * state, which is exactly what a fresh fixture is. It is deliberately NOT "0 repeats found":
+ * those are different facts and the renderer must show them differently (§4.6).
+ */
+export const DEFAULT_DISCLOSURES: Disclosures = {
+  uncosted: { records: 0, byModel: [] },
+  badLines: 0,
+  syntheticEvents: 0,
+  unlinkedSubagentRuns: 0,
+  partialBefore: null,
+  filesMissingSinceLastSync: 0,
+  activeOverlapSeconds: 0,
+  cacheSplitUnknownEvents: 0,
+  cacheSplitArchivedEvents: 0,
+  cacheSplitMismatches: 0,
+  retainedOrphanSessions: 0,
+  retainedOrphanEvents: 0,
+  repeatedApiCalls: { records: 0, checkedRecords: 0, uncheckedRecords: 0, uncheckableRecords: 0 },
+};
+
 export const IDLE_SYNC: SyncState = {
   phase: 'idle',
   kind: null,
@@ -101,6 +125,7 @@ export const IDLE_SYNC: SyncState = {
   filesTotal: 0,
   filesDone: 0,
   recordsIngested: 0,
+  recordsDeduplicated: 0,
   badLines: 0,
   queuedRescan: false,
   lastCompletedAt: null,
@@ -126,21 +151,7 @@ export function bootstrapPayload(
       partialBefore: null,
       statsCacheDays: 0,
     },
-    disclosures: {
-      uncosted: { records: 0, byModel: [] },
-      badLines: 0,
-      syntheticEvents: 0,
-      unlinkedSubagentRuns: 0,
-      partialBefore: null,
-      filesMissingSinceLastSync: 0,
-      activeOverlapSeconds: 0,
-      // A-05 — a booted shell with nothing to disclose. Non-zero cases are driven per test.
-      cacheSplitUnknownEvents: 0,
-      cacheSplitArchivedEvents: 0,
-      cacheSplitMismatches: 0,
-      retainedOrphanSessions: 0,
-      retainedOrphanEvents: 0,
-    },
+    disclosures: DEFAULT_DISCLOSURES,
     ...overrides,
   };
 }

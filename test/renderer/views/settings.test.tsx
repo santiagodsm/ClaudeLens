@@ -9,7 +9,7 @@
  */
 
 import { afterEach, describe, expect, it } from 'vitest';
-import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import {
   COMMUNITY_PRICE_URL,
   IDLE_GAP_BOUNDARY_NOTE,
@@ -17,12 +17,17 @@ import {
   ONLY_NETWORK_REQUEST_NOTE,
   PRICING_EMPTY_REASON,
   REBUILD_WARNING,
+  REREAD_CANNOT_REACH,
+  REREAD_CONFIRM_QUESTION,
+  REREAD_WHAT_IS_KEPT,
+  REREAD_WHAT_IT_DOES,
+  REREAD_WHY,
   SettingsView,
   URL_DISABLED_NOTE,
   URL_OPT_IN_NOTE,
 } from '../../../src/renderer/views/SettingsView';
 import { useAppStore } from '../../../src/renderer/store/app-store';
-import { DEFAULT_SETTINGS } from '../harness';
+import { DEFAULT_SETTINGS, IDLE_SYNC } from '../harness';
 import { ok, renderView, resetAll, uninstallBridge } from './view-harness';
 import { observedModels, priceRows } from './payloads';
 
@@ -64,6 +69,7 @@ describe('§6.10 Settings — the five built cards and the two mounting points',
       'idle-gap',
       'theme',
       'resync',
+      'reread',
       'pricing',
       'project-groups',
       'backups',
@@ -143,6 +149,102 @@ describe('§6.10 Settings — directory, idle gap, theme, re-sync', () => {
       expect(bridge.calls.some((call) => call.channel === 'sync:start')).toBe(true);
     });
     expect(screen.getByTestId('resync-last')).toHaveTextContent('Last sync never');
+  });
+});
+
+describe('§6.10 / A-16 Settings — read every transcript again (§3.18)', () => {
+  it('explains what it does, what is kept, and — plainly — what it can never reach', async () => {
+    renderView(<SettingsView />, stubs());
+    const card = await screen.findByTestId('settings-card-reread');
+
+    // What it does and why, in plain words (§1a).
+    expect(within(card).getByTestId('reread-what')).toHaveTextContent(REREAD_WHAT_IT_DOES);
+    expect(within(card).getByTestId('reread-why')).toHaveTextContent(REREAD_WHY);
+    // ⚠️ The honesty requirement of the brief: it names what survives — every USER class — so the
+    // user is not left guessing whether pressing this loses their prices or their groups.
+    expect(within(card).getByTestId('reread-kept')).toHaveTextContent(REREAD_WHAT_IS_KEPT);
+    // ⚠️⚠️ The honest limit. Archived and vanished transcripts are never re-read, so the card must
+    // not imply a clean sweep. Its own paragraph, present, saying "never" and "cannot".
+    const limit = within(card).getByTestId('reread-cannot-reach');
+    expect(limit).toHaveTextContent(REREAD_CANNOT_REACH);
+    expect(limit.textContent ?? '').toMatch(/never/i);
+    expect(limit.textContent ?? '').toMatch(/cannot bring it back/i);
+  });
+
+  it('⚠️ asks first — it is explicit and user-initiated, never one click (ADR-032)', async () => {
+    const { bridge } = renderView(<SettingsView />, stubs());
+    fireEvent.click(await screen.findByTestId('settings-reread'));
+
+    // The button does NOT fire the rebuild. A confirm step stands between the press and the purge.
+    expect(bridge.calls.some((call) => call.channel === 'sync:rebuild')).toBe(false);
+    const confirm = await screen.findByTestId('reread-confirm');
+    expect(confirm).toHaveTextContent(REREAD_CONFIRM_QUESTION);
+    // ⚠️ The question states, at the moment of commitment, that nothing on disk is touched.
+    expect(confirm.textContent ?? '').toMatch(/nothing in your claude data directory is changed/i);
+  });
+
+  it('backing out of the confirm does nothing at all', async () => {
+    const { bridge } = renderView(<SettingsView />, stubs());
+    fireEvent.click(await screen.findByTestId('settings-reread'));
+    fireEvent.click(await screen.findByTestId('reread-confirm-no'));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('reread-confirm')).not.toBeInTheDocument();
+    });
+    expect(bridge.calls.some((call) => call.channel === 'sync:rebuild')).toBe(false);
+    expect(screen.getByTestId('settings-reread')).toBeInTheDocument();
+  });
+
+  it('confirming calls sync:rebuild exactly once', async () => {
+    const { bridge } = renderView(<SettingsView />, {
+      ...stubs(),
+      'sync:rebuild': () => ok({ ...IDLE_SYNC, phase: 'scanning', kind: 'full' }),
+    });
+    fireEvent.click(await screen.findByTestId('settings-reread'));
+    fireEvent.click(await screen.findByTestId('reread-confirm-yes'));
+
+    await waitFor(() => {
+      const rebuilds = bridge.calls.filter((call) => call.channel === 'sync:rebuild');
+      expect(rebuilds).toHaveLength(1);
+    });
+  });
+
+  it('shows plain-words progress and a Stop while a cycle runs, never a phase name', async () => {
+    renderView(<SettingsView />, stubs(), {}); // seeded IDLE; drive to running below
+    act(() => {
+      useAppStore.setState({
+        sync: { ...IDLE_SYNC, phase: 'parsing', kind: 'full', filesTotal: 400, filesDone: 120 },
+      });
+    });
+    const progress = await screen.findByTestId('reread-progress');
+    expect(progress).toHaveTextContent('Reading transcripts');
+    expect(progress).toHaveTextContent('120 of 400 files');
+    // ⚠️ §1a — the state-machine phase name never reaches the screen.
+    expect(progress.textContent ?? '').not.toMatch(/parsing|scanning|finalizing/i);
+    expect(screen.getByTestId('reread-stop')).toBeInTheDocument();
+    // ⚠️ And the primary button is gone: you cannot start a second rebuild over a running one.
+    expect(screen.queryByTestId('settings-reread')).not.toBeInTheDocument();
+  });
+
+  it('⚠️ a refusal says nothing was cleared and nothing started', async () => {
+    renderView(<SettingsView />, {
+      ...stubs(),
+      'sync:rebuild': () => ({
+        ok: false as const,
+        error: {
+          code: 'E_SYNC_BUSY' as const,
+          message: 'A sync is already running.',
+          retryable: true,
+        },
+      }),
+    });
+    fireEvent.click(await screen.findByTestId('settings-reread'));
+    fireEvent.click(await screen.findByTestId('reread-confirm-yes'));
+
+    const error = await screen.findByTestId('reread-error');
+    // The user was just told the app is about to clear its answers; a bare error would leave them
+    // unsure whether it did. The sentence closes that gap.
+    expect(error.textContent ?? '').toMatch(/nothing was cleared and nothing has started/i);
   });
 });
 

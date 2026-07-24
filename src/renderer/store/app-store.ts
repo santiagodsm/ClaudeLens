@@ -101,6 +101,12 @@ export interface AppState {
   setReduceMotion: (preference: ReduceMotionPreference) => Promise<void>;
   setSidebarCollapsed: (collapsed: boolean) => Promise<void>;
   refresh: () => Promise<void>;
+  /**
+   * A-16 / §3.18 — throw away everything derived from transcripts and read them all again from
+   * the beginning. Resolves to the refusal when the main process declined (nothing was deleted
+   * and no cycle started), or `null` when the rebuild began.
+   */
+  rereadEverything: () => Promise<AppError | null>;
   /** Push-event sinks. Exported so the wiring is testable without an Electron window. */
   applySync: (sync: SyncState) => void;
   applyDataChanged: (scopes: DataScope[]) => void;
@@ -194,6 +200,19 @@ export const useAppStore = create<AppState>()((set) => ({
     set((state) =>
       state.sync === null ? state : { sync: { ...state.sync, error: result.error } },
     );
+  },
+
+  rereadEverything: async () => {
+    const result = await invoke('sync:rebuild');
+    if (result.ok) {
+      set({ sync: result.data });
+      return null;
+    }
+    // ⚠️ Returned, not swallowed onto `SyncState.error` the way `refresh` does. A refusal here
+    // means NOTHING happened — no row was deleted and no cycle started — and the card that asked
+    // for it has to be able to say so where the user pressed the button (§6.10's error row),
+    // rather than leaving a stale-looking sync footer as the only clue.
+    return result.error;
   },
 
   applySync: (sync) => {

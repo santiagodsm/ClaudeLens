@@ -32,6 +32,8 @@ export type ParseWorkerRequest =
 export interface ParseWorkerFileResult {
   readonly relPath: string;
   readonly recordsIngested: number;
+  /** ADR-019 — records already stored under the same `event_key`. Structured-clone safe. */
+  readonly recordsDeduplicated: number;
   readonly badLinesDelta: number;
   readonly cancelled: boolean;
 }

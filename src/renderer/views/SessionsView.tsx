@@ -49,7 +49,12 @@ import { SessionLengthHistogram, bucketRangePhrase } from './charts/SessionLengt
 import type { SessionHistogramBucket } from './charts/SessionLengthHistogram';
 import { Drawer } from './shared/Drawer';
 import { SegmentedControl } from './shared/SegmentedControl';
-import { UncostedLine, costDisclosure, localDayString } from './shared/disclosures';
+import {
+  ListPriceLine,
+  UncostedLine,
+  costDisclosureBlock,
+  localDayString,
+} from './shared/disclosures';
 
 /** §6.5 — "Longest marathons", a leaderboard rather than a table. */
 const MARATHON_LIMIT = 10;
@@ -234,10 +239,32 @@ export function SessionsView(): JSX.Element {
             // asks for "a control to clear the global filter" beside the sentence and a bare
             // `EmptyState` reason cannot carry one.
             onRetry={sessions.refetch}
+            // ⚠️ The table's Cost column puts `$` figures on this card, so the card carries what
+            // §6.12 binds to every `$`. Composed here rather than through `costDisclosureBlock`
+            // for the reason `ProjectsView` gives for its card grid: the block's first decision is
+            // about ONE figure ("no pricing configured — showing tokens only" when it is `null`),
+            // and a table of many rows has no single figure to make that claim about. So the two
+            // lines that DO apply to a collection are rendered directly, in the block's own order
+            // and its own words:
+            //   · line 1, the STANDING list-price caveat — true of every `$` this app will ever
+            //     show, so it is present whenever the table is (approved 2026-07-22, §6.12);
+            //   · line 2, the data-dependent uncosted line (M-06, INV-10), which appears only
+            //     when there is something to disclose.
+            // Absent entirely while the card has no page at all — an error or first-load card
+            // shows no number, so there is nothing to qualify.
             disclosure={
-              page !== null && page.uncosted.records > 0 ? (
-                <UncostedLine uncosted={page.uncosted} />
-              ) : undefined
+              page === null ? undefined : (
+                <>
+                  <span className="block">
+                    <ListPriceLine />
+                  </span>
+                  {page.uncosted.records > 0 && (
+                    <span className="block">
+                      <UncostedLine uncosted={page.uncosted} />
+                    </span>
+                  )}
+                </>
+              )
             }
             data-testid="sessions-table-card"
           >
@@ -610,6 +637,21 @@ function SessionsTable({
           render: (row) => formatInteger(row.tokens.output),
         },
         {
+          id: 'cost',
+          header: 'Cost',
+          numeric: true,
+          // ⚠️ Deliberately NOT `sortable`. §4.5's `SessionSort` has no cost member, and the
+          // listing query cannot page on cost — the per-session `$` comes from E5's grouped cost
+          // query joined onto the page after it is chosen (§5.9 M-05, A-10), not from a column the
+          // page order can be built on. A sortable header here would hand `q:sessions` a sort key
+          // the contract rejects, so the affordance is absent rather than broken.
+          render: (row) =>
+            // ⚠️ Never `$0.00` for an unknown cost: `null` means nothing in this session could be
+            // priced, which is a different fact from zero (§6.4, INV-09/10). The same rule, and
+            // the same em dash, as the drill-down drawer's figure below.
+            row.costNanoUsd === null ? '—' : formatCost(row.costNanoUsd),
+        },
+        {
           id: 'activeSeconds',
           header: 'Active',
           numeric: true,
@@ -675,6 +717,10 @@ function SessionDrawer({
   detail: SessionDetail | null;
   onClose: () => void;
 }): JSX.Element {
+  // §6.5, §6.12 — the drawer's `$` gets the SAME block every other money surface gets, which is
+  // where the A-05 cache-split counts come from. Read here rather than threaded through props,
+  // exactly as `ProjectDetailDrawer` does it.
+  const disclosures = useAppStore((state) => state.disclosures);
   return (
     <Drawer
       open={open}
@@ -727,8 +773,13 @@ function SessionDrawer({
             <p className="text-h3 font-bold text-text-primary" data-testid="drawer-cost">
               {detail.costNanoUsd === null ? '—' : formatCost(detail.costNanoUsd)}
             </p>
-            <p className="text-small text-text-muted">
-              {costDisclosure(detail.costNanoUsd, detail.uncosted)}
+            {/* ⚠️ `costDisclosureBlock`, not `costDisclosure`: the standing list-price caveat
+                (§6.3, approved 2026-07-22) belongs beside EVERY `$`, and this drawer showed a
+                bold figure captioned only "all records costed" — which reads as a claim that the
+                number is a bill. §6.5's disclosure row now names the block, so a future edit that
+                narrows it back contradicts the spec as well as the test. */}
+            <p className="text-small text-text-muted" data-testid="drawer-cost-disclosure">
+              {costDisclosureBlock(detail.costNanoUsd, detail.uncosted, disclosures)}
             </p>
           </section>
 

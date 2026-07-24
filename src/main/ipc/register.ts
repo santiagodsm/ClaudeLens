@@ -85,6 +85,13 @@ export function createHandlers(deps: HandlerDeps): IpcHandlerMap {
     'sync:start': (req) => ok(dataset.startSync(req.kind)),
     'sync:cancel': () => ok(dataset.cancelSync()),
     'sync:state': () => ok(dataset.syncState()),
+    /**
+     * A-16 — the explicit rebuild of §3.18, the only path that re-reads a transcript the app has
+     * already committed. ⚠️ **Not a guarded action**: it mutates no file, so it is not ACT-08 and
+     * the closed catalogue of §5.7 is unchanged (ADR-032). Purge (DERIVED only, both RETAINED
+     * markers guarded) then one full cycle — the pair §5.1 already runs on a directory change.
+     */
+    'sync:rebuild': () => ok(dataset.rebuildDerived()),
 
     // ---- §4.5 Analytics queries — E4's repositories (§5.9 M-01…M-20), wired by E12 ----
     //

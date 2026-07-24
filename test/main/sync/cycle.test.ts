@@ -72,6 +72,7 @@ function scriptedWork(
       return Promise.resolve({
         relPath: file.relPath,
         recordsIngested: 2,
+        recordsDeduplicated: 0,
         badLinesDelta: 1,
         cancelled: false,
       });

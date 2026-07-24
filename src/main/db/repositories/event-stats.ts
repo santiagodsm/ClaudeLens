@@ -9,6 +9,7 @@
 // ⚠️ **Origins roll up (§2.1, ADR-020, INV-02).** No query here filters `origin` unless it is
 // explicitly partitioning by it (M-17). A subagent's tokens are the parent session's tokens.
 
+import { API_CALL_ROWS_CTE } from './api-call-usage';
 import { Repository, sumToSafeNumber } from './base';
 import {
   localDate,
@@ -52,6 +53,37 @@ export interface CacheSplitCoverage {
    * directory and §5.3 `ARCHIVED` never re-parses them (§9.4, ADR-034).
    */
   readonly archivedEvents: number;
+}
+
+/**
+ * §4.6 (migration 0011) — repeated API calls, and ⚠️ **how much of the data could actually be
+ * examined**, which is the half that makes the first number honest.
+ *
+ * Claude Code writes one assistant turn as several JSONL lines sharing one `message.id`. ⚠️ Since
+ * ADR-042 the token/cost totals sum each such call ONCE (`api-call-usage.ts`), so this is no longer
+ * "your totals are inflated" — for the CHECKED population it reports how many records shared a call
+ * (now collapsed). It still matters because rows ingested before migration 0011 carry no id, cannot
+ * be collapsed, and a bare "0 repeated" over them would be indistinguishable from "nothing was
+ * checked" — CLAUDE.md §1's worst outcome wearing a disclosure's clothes. Hence four numbers, not
+ * one, and the last two follow A-05's precedent: one remedy that works and one honest admission
+ * that there is none.
+ */
+export interface ApiCallCoverage {
+  /**
+   * Records that share an API-call id with at least one other record, counted over the examined
+   * population only. ⚠️ Meaningless without `checkedRecords` beside it.
+   */
+  readonly repeatedRecords: number;
+  /** Records the app could examine: ingested by a build that reads the id. The denominator. */
+  readonly checkedRecords: number;
+  /** Not examined, but re-readable: a rebuild re-parses these transcripts and fills them in. */
+  readonly uncheckedRecords: number;
+  /**
+   * ⚠️⚠️ Not examined and **never** examinable: archived (`archive_id IS NOT NULL`) or
+   * retained-orphan files. Those transcripts have left the Claude data directory or vanished
+   * outright and are never re-parsed (§5.3, ADR-034/041), so no rebuild can reach them.
+   */
+  readonly uncheckableRecords: number;
 }
 
 /**
@@ -134,12 +166,19 @@ export class EventStatsRepository extends Repository {
     super(db);
   }
 
-  /** M-02 / M-03 / M-04 over M-01 in scope. */
+  /**
+   * M-02 / M-03 / M-04 over M-01 in scope.
+   *
+   * ⚠️ ADR-042 — sums over `api_call_rows`, so a call written as several JSONL lines contributes
+   * its usage ONCE (the final line's authoritative total). The seam adds no bind params, so the
+   * scope clause and its `?`s are unchanged.
+   */
   tokenTotals(context: QueryContext): TokenTotals {
     const scope = scopeClause(context.filter, 'e');
     return readTokens(
       this.one<TokenRecord>(
-        `SELECT ${TOKEN_COLUMNS} FROM events e WHERE ${COUNTABLE}${scope.sql}`,
+        `WITH ${API_CALL_ROWS_CTE}
+         SELECT ${TOKEN_COLUMNS} FROM api_call_rows e WHERE ${COUNTABLE}${scope.sql}`,
         ...scope.params,
       ),
     );
@@ -182,16 +221,30 @@ export class EventStatsRepository extends Repository {
    */
   originSplit(context: QueryContext): { main: OriginTotalsRow; subagent: OriginTotalsRow } {
     const eventScope = scopeClause(context.filter, 'e');
-    const rows = this.all<
-      TokenRecord & { readonly origin: string; readonly messages: number | bigint | null }
-    >(
-      `SELECT e.origin AS origin,
-              ${TOKEN_COLUMNS},
-              COALESCE(SUM(CASE WHEN e.role IN ('assistant','user') THEN 1 ELSE 0 END), 0) AS messages
-       FROM   events e
+    // ⚠️ ADR-042 — the TOKEN sums are over `api_call_rows` (one row per call), the MESSAGE count
+    // is over raw `events` (M-11 is a count of rows, unchanged). Two queries, because the two
+    // populations now differ. INV-02 still holds exactly for BOTH: every line of a call shares one
+    // `origin`, so `main + subagent` equals the deduped total for tokens just as it does for the
+    // per-line message count.
+    const tokenRows = this.all<TokenRecord & { readonly origin: string }>(
+      `WITH ${API_CALL_ROWS_CTE}
+       SELECT e.origin AS origin, ${TOKEN_COLUMNS}
+       FROM   api_call_rows e
        WHERE  ${COUNTABLE}${eventScope.sql}
        GROUP BY e.origin`,
       ...eventScope.params,
+    );
+    const msgScope = scopeClause(context.filter, 'e');
+    const msgRows = this.all<{
+      readonly origin: string;
+      readonly messages: number | bigint | null;
+    }>(
+      `SELECT e.origin AS origin,
+              COALESCE(SUM(CASE WHEN e.role IN ('assistant','user') THEN 1 ELSE 0 END), 0) AS messages
+       FROM   events e
+       WHERE  ${COUNTABLE}${msgScope.sql}
+       GROUP BY e.origin`,
+      ...msgScope.params,
     );
     const toolScope = scopeClause(context.filter, 't');
     const toolRows = this.all<{ readonly origin: string; readonly calls: number }>(
@@ -203,11 +256,11 @@ export class EventStatsRepository extends Repository {
     );
 
     const side = (origin: 'main' | 'subagent'): OriginTotalsRow => {
-      const tokens = readTokens(rows.find((row) => row.origin === origin));
+      const tokens = readTokens(tokenRows.find((row) => row.origin === origin));
       return {
         ...tokens,
         messages: sumToSafeNumber(
-          rows.find((row) => row.origin === origin)?.messages ?? null,
+          msgRows.find((row) => row.origin === origin)?.messages ?? null,
           'messages',
         ),
         toolCalls: toolRows.find((row) => row.origin === origin)?.calls ?? 0,
@@ -286,7 +339,9 @@ export class EventStatsRepository extends Repository {
    * an under-specification rather than settled silently.
    */
   modelMixTimeline(context: QueryContext, bucket: TimelineBucket): TimelineCell[] {
-    return this.#timeline(context, bucket, 'COUNT(*)');
+    // COUNT(*) is a per-line event count ("how often each model appeared"), NOT a usage sum, so it
+    // reads raw `events` and is left unchanged by ADR-042.
+    return this.#timeline(context, bucket, 'COUNT(*)', 'events');
   }
 
   /** §4.5 `q:tokensByModel` — M-02 (`output_only`) or all **five** classes summed (`all`). */
@@ -300,12 +355,21 @@ export class EventStatsRepository extends Repository {
         ? 'COALESCE(SUM(e.tok_output), 0)'
         : `COALESCE(SUM(e.tok_input + e.tok_output + e.tok_cache_write
              + COALESCE(e.tok_cache_write_1h, 0) + e.tok_cache_read), 0)`;
-    return this.#timeline(context, bucket, measure);
+    // ⚠️ ADR-042 — a token SUM, so it reads `api_call_rows` (one row per call).
+    return this.#timeline(context, bucket, measure, 'api_call_rows');
   }
 
-  #timeline(context: QueryContext, bucket: TimelineBucket, measure: string): TimelineCell[] {
+  #timeline(
+    context: QueryContext,
+    bucket: TimelineBucket,
+    measure: string,
+    source: 'events' | 'api_call_rows',
+  ): TimelineCell[] {
     const scope = scopeClause(context.filter, 'e');
     const bucketExpression = bucket === 'week' ? localWeekStart('e.ts') : localDate('e.ts');
+    // The seam is a CTE, so it only prefixes the query when this timeline sums usage; the COUNT
+    // path stays a plain scan of `events`. The seam binds no params, so `scope` is unaffected.
+    const withClause = source === 'api_call_rows' ? `WITH ${API_CALL_ROWS_CTE}\n       ` : '';
     return this.all<{
       readonly bucket: string;
       readonly model: string;
@@ -313,8 +377,8 @@ export class EventStatsRepository extends Repository {
     }>(
       // `model IS NOT NULL` because a series needs a name; ADR-025 forbids inventing one. Events
       // with no model are still counted everywhere a model is not the grouping key.
-      `SELECT ${bucketExpression} AS bucket, e.model AS model, ${measure} AS value
-       FROM   events e
+      `${withClause}SELECT ${bucketExpression} AS bucket, e.model AS model, ${measure} AS value
+       FROM   ${source} e
        WHERE  ${COUNTABLE} AND e.model IS NOT NULL${scope.sql}
        GROUP BY bucket, model
        ORDER BY bucket, model`,
@@ -402,6 +466,77 @@ export class EventStatsRepository extends Repository {
     return {
       unknownEvents: sumToSafeNumber(row?.unknown_events ?? null, 'cacheSplitUnknownEvents'),
       archivedEvents: sumToSafeNumber(row?.archived_events ?? null, 'cacheSplitArchivedEvents'),
+    };
+  }
+
+  /**
+   * §4.6 (migration 0011) — repeated API calls, WITH the coverage that makes the count readable.
+   *
+   * ⚠️⚠️ **THE TRAP THIS METHOD EXISTS TO DEFUSE.** `message_id IS NULL` means two different
+   * things — "this record states none" and "this record was read before the app looked" — and a
+   * count that conflated them would report `0` for a database in which nothing was checked. So
+   * the population is split by the `file_manifest.api_ids_from_line` watermark, which is exact:
+   * an event was examined iff `e.line_no > fm.api_ids_from_line` for its source file (see 0011's
+   * header for why a per-file watermark and not a boolean). `repeatedRecords` is computed over
+   * the examined half ONLY, and `checkedRecords` travels with it so the caller can say what
+   * fraction of the data the number speaks for.
+   *
+   * ⚠️ The unexamined half is split the way A-05's is: files that can still be re-read
+   * (`uncheckedRecords` — a rebuild fixes them, §3.18) versus archived and retained-orphan files
+   * (`uncheckableRecords` — never, §5.3, ADR-034/041). Folding them together would tell the user
+   * to rebuild something a rebuild cannot touch.
+   *
+   * ⚠️ The population is the COSTED one — M-01 (`is_synthetic = 0`) and carrying at least one
+   * token — because a record with no usage repeats no usage. It matches migration 0011's partial
+   * index verbatim.
+   *
+   * ⚠️ Deliberately UNFILTERED by the `GlobalFilter`, exactly like `cacheSplitCoverage()`: it
+   * describes the stored dataset, and a date range that excluded the repeats would make the
+   * caveat vanish while the totals it qualifies stayed inflated.
+   *
+   * ⚠️ **Reads only. Nothing here changes a token sum, a cost or the costed population** — the
+   * arithmetic decision is deliberately deferred until this can be sized against real data.
+   */
+  apiCallCoverage(): ApiCallCoverage {
+    // The costed population, written once so the three counts below cannot drift apart. It is
+    // the same predicate migration 0011's partial index carries.
+    const usable = `${COUNTABLE} AND (e.tok_input + e.tok_output + e.tok_cache_write
+                     + COALESCE(e.tok_cache_write_1h, 0) + e.tok_cache_read) > 0`;
+    // Migration 0011 — the exact boundary between examined and not. `line_no` is 1-based and the
+    // watermark counts leading lines, so `>` (not `>=`) is the correct comparison.
+    const examined = 'e.line_no > fm.api_ids_from_line';
+
+    const row = this.one<{
+      readonly repeated: number | bigint | null;
+      readonly checked: number | bigint | null;
+      readonly unchecked: number | bigint | null;
+      readonly uncheckable: number | bigint | null;
+    }>(
+      `SELECT
+         (SELECT COALESCE(SUM(n), 0) FROM (
+            SELECT COUNT(*) AS n
+              FROM events e
+              JOIN file_manifest fm ON fm.id = e.source_file_id
+             WHERE ${usable} AND ${examined} AND e.message_id IS NOT NULL
+             GROUP BY e.message_id
+            HAVING COUNT(*) > 1))                                       AS repeated,
+         (SELECT COUNT(*) FROM events e
+            JOIN file_manifest fm ON fm.id = e.source_file_id
+           WHERE ${usable} AND ${examined})                             AS checked,
+         (SELECT COUNT(*) FROM events e
+            JOIN file_manifest fm ON fm.id = e.source_file_id
+           WHERE ${usable} AND NOT (${examined})
+             AND fm.archive_id IS NULL AND fm.retained_orphan = 0)      AS unchecked,
+         (SELECT COUNT(*) FROM events e
+            JOIN file_manifest fm ON fm.id = e.source_file_id
+           WHERE ${usable} AND NOT (${examined})
+             AND (fm.archive_id IS NOT NULL OR fm.retained_orphan = 1)) AS uncheckable`,
+    );
+    return {
+      repeatedRecords: sumToSafeNumber(row?.repeated ?? null, 'repeatedApiCallRecords'),
+      checkedRecords: sumToSafeNumber(row?.checked ?? null, 'apiCallCheckedRecords'),
+      uncheckedRecords: sumToSafeNumber(row?.unchecked ?? null, 'apiCallUncheckedRecords'),
+      uncheckableRecords: sumToSafeNumber(row?.uncheckable ?? null, 'apiCallUncheckableRecords'),
     };
   }
 

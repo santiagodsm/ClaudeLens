@@ -223,6 +223,11 @@ function writeEvents(
       subagentRunId,
       uuid: event.uuid,
       parentUuid: event.parentUuid,
+      // Migration 0011 — stored so §4.6 can COUNT records that share an API call. ⚠️ The insert
+      // below is still `ON CONFLICT(event_key) DO NOTHING`: these are not a second dedup key and
+      // no record is dropped, merged or re-counted because of them.
+      messageId: event.messageId,
+      requestId: event.requestId,
       isSidechain: event.isSidechain ? 1 : 0,
       model: event.model,
       isSynthetic: event.isSynthetic ? 1 : 0,

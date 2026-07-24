@@ -61,7 +61,16 @@ describe('the parse worker runtime', () => {
       type: 'parsed',
       id: 1,
       ok: true,
-      result: { relPath: TRANSCRIPT, recordsIngested: 3, badLinesDelta: 0, cancelled: false },
+      result: {
+        relPath: TRANSCRIPT,
+        recordsIngested: 3,
+        // ADR-019 — a first parse of a file whose three records have distinct keys, so the
+        // `ON CONFLICT DO NOTHING` never fires. The counter now crosses the thread boundary
+        // instead of being computed and dropped in `engine.ts`.
+        recordsDeduplicated: 0,
+        badLinesDelta: 0,
+        cancelled: false,
+      },
     });
 
     expect(await runtime.handle({ type: 'finalize', id: 2 })).toEqual({

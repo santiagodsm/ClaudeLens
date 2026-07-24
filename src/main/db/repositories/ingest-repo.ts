@@ -46,6 +46,14 @@ export interface InsertEventInput {
   readonly subagentRunId: number | null;
   readonly uuid: string | null;
   readonly parentUuid: string | null;
+  /**
+   * §3.5 (migration 0011) — `message.id`, the API call the record came from. ⚠️ `null` means the
+   * record states none; it is never a placeholder, and it is **not** part of event identity —
+   * `INSERT_EVENT` still conflicts on `event_key` alone (ADR-019).
+   */
+  readonly messageId: string | null;
+  /** §3.5 (migration 0011) — the record's own `requestId`, verbatim. `null` when absent. */
+  readonly requestId: string | null;
   readonly isSidechain: number;
   readonly model: string | null;
   readonly isSynthetic: number;
@@ -157,14 +165,20 @@ const UPSERT_SESSION = `INSERT INTO sessions (id, project_id, transcript_file_id
 // §3.5 events — ADR-019
 // ---------------------------------------------------------------------------------------
 
+// ⚠️ `message_id` / `request_id` arrive with migration 0011 and are payload, NOT identity. The
+// conflict target is still `event_key` and still `DO NOTHING` (§3.5, ADR-019): several records of
+// one assistant turn share a `message.id` and are genuinely distinct records, so nothing here may
+// treat the shared id as a duplicate. Counting them is §4.6's job, at query time.
 const INSERT_EVENT = `INSERT INTO events
   (event_key, session_id, project_id, source_file_id, line_no, ts, type, role, origin,
-   subagent_run_id, uuid, parent_uuid, is_sidechain, model, is_synthetic, is_api_error,
+   subagent_run_id, uuid, parent_uuid, message_id, request_id, is_sidechain, model,
+   is_synthetic, is_api_error,
    tok_input, tok_output, tok_cache_write, tok_cache_write_1h, tok_cache_read,
    git_branch, cli_version, cwd)
   VALUES
   (@eventKey, @sessionId, @projectId, @sourceFileId, @lineNo, @ts, @type, @role, @origin,
-   @subagentRunId, @uuid, @parentUuid, @isSidechain, @model, @isSynthetic, @isApiError,
+   @subagentRunId, @uuid, @parentUuid, @messageId, @requestId, @isSidechain, @model,
+   @isSynthetic, @isApiError,
    @tokInput, @tokOutput, @tokCacheWrite, @tokCacheWrite1h, @tokCacheRead,
    @gitBranch, @cliVersion, @cwd)
   ON CONFLICT(event_key) DO NOTHING`;

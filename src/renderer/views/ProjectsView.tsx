@@ -22,7 +22,7 @@
  */
 
 import { useState } from 'react';
-import type { JSX } from 'react';
+import type { JSX, ReactNode } from 'react';
 import type { AppError, ProjectCard as ProjectCardPayload } from '../../shared/ipc-contract';
 import { invoke } from '../lib/ipc';
 import { Badge } from '../components/Badge';
@@ -36,7 +36,7 @@ import { useAppStore } from '../store/app-store';
 import { ViewShell } from '../shell/ViewShell';
 import { EditSparkline } from './charts/EditSparkline';
 import { ProjectDetailDrawer } from './shared/ProjectDetailDrawer';
-import { UncostedLine } from './shared/disclosures';
+import { ListPriceLine, UncostedLine } from './shared/disclosures';
 
 /** §6.8's empty copy, verbatim (including the trailing full stop and the code span's words). */
 export const PROJECTS_EMPTY_REASON = 'No projects found under projects/.';
@@ -255,26 +255,62 @@ function ProjectCard({
         <EditSparkline buckets={card.editSparkline} colorIndex={card.colorIndex} />
       </div>
 
-      {card.costNanoUsd !== null && (
-        <p className="mt-3 text-small text-text-muted">{formatCost(card.costNanoUsd)}</p>
-      )}
+      {/*
+        §6.8 / §6.12 / §1a — the card's `$`, labelled and captioned like every other money surface.
+        Before this it was a bare `formatCost(...)` with no label at all, sitting under a sparkline
+        among four labelled siblings: a number with no answer to "what is this".
+
+        ⚠️ **Why the `Metric` shape and not `costDisclosureBlock`.** The block is three-to-five
+        lines; repeated across a 3-column grid of cards it would be more caveat than card, and §6.8
+        loading promises "skeleton cards at final height". So the card takes the lightest treatment
+        that still answers the question *on the card*: the same `<dt>/<dd>` label its siblings use,
+        plus the STANDING list-price line in the `note` slot the Active metric already uses. That
+        line is the only one that is unconditionally true, so it is the only one that has to be on
+        every card. The data-dependent lines are not dropped — the uncosted line renders once
+        beneath the grid (above), and the full block renders in the detail drawer a card click
+        opens, which is one click and no screen away.
+
+        ⚠️ Rendered in EVERY state, `—` when nothing is costed (§6.4: no `$` at all, never `$0.00`),
+        so the caveat cannot disappear with the data and the card cannot change height.
+      */}
+      <dl className="mt-4">
+        <Metric
+          label="Cost"
+          value={card.costNanoUsd === null ? '—' : formatCost(card.costNanoUsd)}
+          note={<ListPriceLine />}
+          testId="project-card-cost"
+        />
+      </dl>
     </section>
   );
 }
 
+/**
+ * One labelled figure on a card. `note` is a `ReactNode` rather than a `string` so the Cost metric
+ * can put the shared `ListPriceLine` element in the same slot the Active metric puts its idle-gap
+ * sentence in — one caption slot, one style, whatever the caption happens to be (§6.12).
+ *
+ * ⚠️ It renders a `<dt>/<dd>` pair, so every caller must sit inside a `<dl>`. The Cost metric is
+ * wrapped in its own `<dl>` because §6.8 fixes the stat grid at a 2×2 and a fifth cell would leave
+ * a dangling half-row.
+ */
 function Metric({
   label,
   value,
   note,
+  testId,
 }: {
   label: string;
   value: string;
-  note?: string;
+  note?: ReactNode;
+  testId?: string;
 }): JSX.Element {
   return (
     <div>
       <dt className="text-micro uppercase text-text-muted">{label}</dt>
-      <dd className="text-h3 font-bold text-text-primary">{value}</dd>
+      <dd className="text-h3 font-bold text-text-primary" data-testid={testId}>
+        {value}
+      </dd>
       {note !== undefined && <dd className="text-micro text-text-faint">{note}</dd>}
     </div>
   );

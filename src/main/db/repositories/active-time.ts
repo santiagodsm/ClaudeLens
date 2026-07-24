@@ -73,6 +73,21 @@ export interface WorkingDayGroup {
   readonly sessions: number;
 }
 
+/**
+ * The two binding-(B) readings §6.8 needs at once — see `byWorkingDayViews`.
+ *
+ * ⚠️ `units` and `folders` do NOT sum to each other, and that is the point (ADR-040): once two
+ * folders are one project, a same-day gap between them is inside one partition and is counted.
+ * §6.8 says that on screen in plain words rather than leaving two numbers that look like they
+ * should add up (§1a).
+ */
+export interface WorkingDayViews {
+  /** Partitioned by `(local day, project unit)` — the numbers every card and tile reports. */
+  readonly units: readonly WorkingDayGroup[];
+  /** Partitioned by `(local day, raw folder)` — what each folder shows standing alone. */
+  readonly folders: readonly WorkingDayGroup[];
+}
+
 /** M-07 binding (A), one row per session in scope. */
 export interface SessionActiveRow {
   readonly sessionId: string;
@@ -105,6 +120,7 @@ export interface OverlapTotals {
 function scopedCte(
   filter: QueryContext['filter'],
   grouped = true,
+  restrictProjectIds?: readonly number[],
 ): { sql: string; params: SqlParam[] } {
   const scope = scopeClause(filter, 'e');
   // ⚠️ `grouped: false` is the "as if no group existed" stream, and it exists for exactly one
@@ -113,11 +129,23 @@ function scopedCte(
   // surface that reports the unit uses the grouped stream. ⚠️ The two do NOT sum to each other,
   // and that is the point (see (4a) above); §6.8 says so on screen in plain words rather than
   // leaving two numbers that look like they should add up.
+  // ⚠️ It is also only ever asked for over the folders the user actually grouped, because those
+  // are the only folders the two streams disagree about — `byWorkingDayViews` states why.
   const unit = grouped
     ? `COALESCE(u.unit_id, e.project_id)`
     : // The raw column, untouched by grouping.
       `e.project_id`;
   const join = grouped ? `\n  LEFT   JOIN project_unit u ON u.project_id = e.project_id` : '';
+  // ⚠️ A narrowing of the event set, NOT a second filter concept. The partition of the ungrouped
+  // stream is `(local day, e.project_id)`, which never spans two folders, so restricting the rows
+  // to a set of folders leaves every surviving partition's stream — and therefore every number
+  // computed from it — untouched. `byWorkingDayViews` is the one caller and it relies on exactly
+  // that (see its comment). An empty list would produce `IN ()`, which is not SQL; the caller
+  // never passes one.
+  const restriction =
+    restrictProjectIds === undefined
+      ? ''
+      : `\n    AND e.project_id IN (${restrictProjectIds.map(() => '?').join(', ')})`;
   return {
     sql: `${PROJECT_UNIT_CTE},
 scoped AS (
@@ -126,9 +154,9 @@ scoped AS (
          e.ts,
          ${localDate('e.ts')} AS local_day
   FROM   events e${join}
-  WHERE  1 = 1${scope.sql}
+  WHERE  1 = 1${scope.sql}${restriction}
 )`,
-    params: scope.params,
+    params: [...scope.params, ...(restrictProjectIds ?? [])],
   };
 }
 
@@ -202,6 +230,8 @@ GROUP BY local_day, project_id`;
 }
 
 /**
+ * M-19 **and** M-07 binding (C), from ONE pass over the working-day gapped stream.
+ *
  * M-19 — the measure of the union of covered intervals, by sort-and-merge sweep.
  *
  * Covered interval, per M-19: for each event `i ≥ 1` of a partition with gap `gᵢ` and cap `c`,
@@ -216,14 +246,48 @@ GROUP BY local_day, project_id`;
  * ⚠️ The partition here is the WORKING-DAY partition, the same one binding (C) sums over. M-20
  * is `(C) − M-19`, and the two halves must be over the same partitioning or the difference is
  * not an overlap at all.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────────────────
+ * ⚠️ **WHY BINDING (C) IS COMPUTED HERE INSTEAD OF BY A SECOND STATEMENT.** `overlap()` used to
+ * run the M-08 statement and this one back to back. Both open by building the SAME `scoped` and
+ * the SAME `gapped` — one index scan of `events`, one `date(…,'localtime')` per row and one sort
+ * of the whole stream, done twice to produce two readings of one computation. On the §8 reference
+ * dataset that second build was ~50% of the method. M-19's own paragraph above is what makes the
+ * merge legitimate rather than a shortcut: the `Cᵢ` of a partition are disjoint and their measure
+ * IS that partition's M-07, so `SUM(end_ms − start_ms)` per working-day group is binding (B)
+ * *by M-19's own definition*, not by a second derivation that could drift from it.
+ *
+ * Three things are preserved exactly, because each is a way this could have gone silently wrong:
+ *
+ *   · **The unit of the sum.** §5.9 M-07 binding (C) and INV-21 are the sum of the per-group
+ *     SECONDS, not of the per-group milliseconds — `SUM(active_ms / 1000)` is that, group by
+ *     group, before any addition. Both operands are INTEGER (see `CAPPED_GAP_MS`), so `/` is
+ *     SQLite integer division and every value here is `≥ 0`, which is `Math.trunc` exactly. The
+ *     millisecond sum is returned alongside it, unrounded, because M-20's subtraction is done in
+ *     the storage unit (see `overlap()`).
+ *   · **Groups whose every gap is NULL.** `covered` drops them, `gapped` did not. Such a group is
+ *     one event, its binding-(B) value is 0, and 0 changes neither sum. It never had a covered
+ *     interval to contribute to M-19 either.
+ *   · **INV-11.** The bound is still asserted, on the totals, by `sumToSafeNumber` in `overlap()`.
+ *     A per-group value past `2^53−1` cannot hide inside a total that is under it.
+ *
+ * `span_ms` and `sessions` are deliberately NOT computed here: `overlap()` never used them, and
+ * `byWorkingDay()` remains the one place M-08's three-numbers-over-one-group promise is kept.
  */
-function dedupSql(scoped: string): string {
+function overlapSql(scoped: string): string {
   return `WITH ${scoped},
 ${gappedCte(WORKING_DAY_PARTITION)},
 covered AS (
-  SELECT ts - ${CAPPED_GAP_MS} AS start_ms, ts AS end_ms
+  SELECT local_day, project_id,
+         ts - ${CAPPED_GAP_MS} AS start_ms,
+         ts                    AS end_ms
   FROM   gapped
   WHERE  gap IS NOT NULL
+),
+per_group AS (
+  SELECT SUM(end_ms - start_ms) AS active_ms
+  FROM   covered
+  GROUP BY local_day, project_id
 ),
 swept AS (
   SELECT start_ms, end_ms,
@@ -231,10 +295,12 @@ swept AS (
                            ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) AS prev_max
   FROM   covered
 )
-SELECT COALESCE(SUM(
+SELECT (SELECT COALESCE(SUM(active_ms), 0)        FROM per_group) AS active_ms,
+       (SELECT COALESCE(SUM(active_ms / 1000), 0) FROM per_group) AS active_seconds,
+       COALESCE(SUM(
          CASE WHEN prev_max IS NULL      THEN end_ms - start_ms
               WHEN end_ms  >  prev_max   THEN end_ms - MAX(start_ms, prev_max)
-              ELSE 0 END), 0) AS union_ms
+              ELSE 0 END), 0)                                     AS union_ms
 FROM   swept`;
 }
 
@@ -255,6 +321,13 @@ interface WorkingDayRecord {
   readonly active_ms: number | bigint | null;
   readonly span_ms: number | bigint | null;
   readonly sessions: number;
+}
+
+/** The single row `overlapSql` returns — M-07 binding (C) in both units, and M-19. */
+interface OverlapRecord {
+  readonly active_ms: number | bigint | null;
+  readonly active_seconds: number | bigint | null;
+  readonly union_ms: number | bigint | null;
 }
 
 export class ActiveTimeRepository extends Repository {
@@ -289,37 +362,53 @@ export class ActiveTimeRepository extends Repository {
       workingDaySql(scoped.sql),
       ...scoped.params,
       idleGapMs(context),
-    ).map((row) => ({
-      day: row.day,
-      projectId: row.project_id,
-      activeSeconds: msToSeconds(row.active_ms, 'activeSeconds'),
-      spanSeconds: msToSeconds(row.span_ms, 'spanSeconds'),
-      sessions: row.sessions,
-    }));
+    ).map(toWorkingDayGroup);
   }
 
   /**
-   * M-07 binding **(B)** partitioned by the RAW `events.project_id`, ignoring every grouping.
+   * Both binding-**(B)** views §6.8 needs — over the **units**, and over the **raw folders**,
+   * ignoring every grouping — computed once wherever the two are the same computation.
    *
-   * ⚠️ One caller only: §6.8's member list inside a group's card, which shows each folder's own
-   * numbers — the numbers it had before it was grouped. ⚠️ **These do not sum to the group's
-   * active time and must never be presented as if they did** (ADR-040): merging two folders
-   * turns the gaps between them on a shared day into intra-partition gaps, which are capped and
-   * counted. The view states that in plain words beside the list (§1a).
+   * ⚠️ `folders` is the "as if no group existed" reading, and it exists for exactly one reason:
+   * §6.8 shows a group's member folders WITH THEIR OWN NUMBERS, the numbers they had before they
+   * were grouped. ⚠️ **They do not sum to the group's active time and must never be presented as
+   * if they did** (ADR-040): merging two folders turns the gaps between them on a shared day into
+   * intra-partition gaps, which are capped and counted. The view says so in plain words beside the
+   * list (§1a).
+   *
+   * ─────────────────────────────────────────────────────────────────────────────────────────
+   * ⚠️ **WHY ONE OF THE TWO SCANS IS USUALLY NOT RUN AT ALL.** `q:projectCards` used to run the
+   * whole working-day window twice — once partitioned by `(local day, unit)`, once by
+   * `(local day, folder)` — over every event in scope. But the two partitions differ **only where
+   * a grouping exists.** For a folder in no group `PROJECT_UNIT_CTE` gives `unit_id = p.id`
+   * (project-groups.ts note 3), so `(local day, unit)` and `(local day, folder)` are the same
+   * partition over the same events, and the unit row IS the folder row — same day, same id, same
+   * active seconds, same span, same session count. Two projects can never share a positive unit id
+   * either, because a positive unit id is a project's own rowid.
+   *
+   * So the folder view is assembled: the unit rows with a positive id are reused verbatim, and the
+   * window is re-run **only over the folders the user actually grouped**. With no groups — the
+   * common case — the second scan disappears; with groups it is narrowed to those folders' events;
+   * it can never cost more than the scan it replaces. ⚠️ This is a "stop computing it twice"
+   * change and nothing else: the rows are the same rows, which is what
+   * `test/metrics/f16-grouped-active-time.test.ts` and `f13` hold it to.
+   *
+   * ⚠️ The set of regrouped folders is read from `project_unit` itself rather than from
+   * `project_group_members`, so the equality argument above is stated over the very expression
+   * that decides the partition, and the two cannot drift.
    */
-  byWorkingDayUngrouped(context: QueryContext): WorkingDayGroup[] {
-    const scoped = scopedCte(context.filter, false);
-    return this.all<WorkingDayRecord>(
-      workingDaySql(scoped.sql),
-      ...scoped.params,
-      idleGapMs(context),
-    ).map((row) => ({
-      day: row.day,
-      projectId: row.project_id,
-      activeSeconds: msToSeconds(row.active_ms, 'activeSeconds'),
-      spanSeconds: msToSeconds(row.span_ms, 'spanSeconds'),
-      sessions: row.sessions,
-    }));
+  byWorkingDayViews(context: QueryContext): WorkingDayViews {
+    const units = this.byWorkingDay(context);
+    const regrouped = this.#regroupedProjectIds();
+    if (regrouped.length === 0) return { units, folders: units };
+    return {
+      units,
+      folders: [
+        // A positive unit id is a folder in no group, reporting under its own id.
+        ...units.filter((row) => row.projectId > 0),
+        ...this.#workingDayForFolders(context, regrouped),
+      ],
+    };
   }
 
   /**
@@ -349,28 +438,18 @@ export class ActiveTimeRepository extends Repository {
    */
   overlap(context: QueryContext): OverlapTotals {
     const scoped = scopedCte(context.filter);
-    const cap = idleGapMs(context);
-
-    let activeMs = 0;
-    let activeSeconds = 0;
-    for (const row of this.all<WorkingDayRecord>(
-      workingDaySql(scoped.sql),
+    const totals = this.one<OverlapRecord>(
+      overlapSql(scoped.sql),
       ...scoped.params,
-      cap,
-    )) {
-      activeMs += sumToSafeNumber(row.active_ms, 'activeMs');
-      activeSeconds += msToSeconds(row.active_ms, 'activeSeconds');
-    }
-
-    const union = this.one<{ readonly union_ms: number | bigint | null }>(
-      dedupSql(scoped.sql),
-      ...scoped.params,
-      cap,
+      idleGapMs(context),
     );
-    const dedupMs = sumToSafeNumber(union?.union_ms ?? null, 'dedupMs');
+    const activeMs = sumToSafeNumber(totals?.active_ms ?? null, 'activeMs');
+    const dedupMs = sumToSafeNumber(totals?.union_ms ?? null, 'dedupMs');
 
     return {
-      activeSeconds,
+      // ⚠️ Already the sum of the per-group SECONDS (see `overlapSql`), so INV-21 still holds by
+      // construction: this is `SUM(trunc(groupMs / 1000))`, never `trunc(SUM(groupMs) / 1000)`.
+      activeSeconds: sumToSafeNumber(totals?.active_seconds ?? null, 'activeSeconds'),
       activeMs,
       dedupMs,
       overlapSeconds: Math.trunc((activeMs - dedupMs) / 1000),
@@ -386,6 +465,41 @@ export class ActiveTimeRepository extends Repository {
     );
     return sumToSafeNumber(row?.elapsed_ms ?? null, 'elapsedMs');
   }
+
+  /**
+   * The folders whose partition the grouping actually moves — `unit_id <> project_id`.
+   *
+   * ⚠️ Read from `PROJECT_UNIT_CTE`, the same expression `scoped` partitions by, so "these are the
+   * folders whose two views differ" is true of the query that computes the views and not merely of
+   * the membership table beside it (project-groups.ts note 2 and note 4).
+   */
+  #regroupedProjectIds(): number[] {
+    return this.all<{ readonly project_id: number }>(
+      `WITH ${PROJECT_UNIT_CTE}
+       SELECT project_id FROM project_unit WHERE unit_id <> project_id`,
+    ).map((row) => row.project_id);
+  }
+
+  /** Binding (B) over the RAW `events.project_id`, restricted to the named folders. */
+  #workingDayForFolders(context: QueryContext, projectIds: readonly number[]): WorkingDayGroup[] {
+    const scoped = scopedCte(context.filter, false, projectIds);
+    return this.all<WorkingDayRecord>(
+      workingDaySql(scoped.sql),
+      ...scoped.params,
+      idleGapMs(context),
+    ).map(toWorkingDayGroup);
+  }
+}
+
+/** One `WorkingDayGroup` from one row, so the three call sites cannot convert it three ways. */
+function toWorkingDayGroup(row: WorkingDayRecord): WorkingDayGroup {
+  return {
+    day: row.day,
+    projectId: row.project_id,
+    activeSeconds: msToSeconds(row.active_ms, 'activeSeconds'),
+    spanSeconds: msToSeconds(row.span_ms, 'spanSeconds'),
+    sessions: row.sessions,
+  };
 }
 
 /**

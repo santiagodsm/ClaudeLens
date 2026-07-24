@@ -215,7 +215,15 @@ export type DirPickResult =
 /** §4.4 (§5.2 SM-2) */
 export type SyncPhase = 'idle' | 'scanning' | 'parsing' | 'finalizing' | 'cancelling' | 'failed';
 
-/** §4.4 */
+/**
+ * §4.4
+ *
+ * ⚠️ **`'full'` does NOT force a re-parse** (§4.4 as amended 2026-07-24). Nothing in the scan or
+ * parse phase reads `kind`; classification is §5.3's, driven by size and mtime, so an
+ * already-parsed file is still `UNCHANGED` or `GREW`. All `'full'` changes is that it refuses to
+ * be coalesced into a running cycle. The channel that actually re-reads everything is
+ * `sync:rebuild` below, which runs §3.18's purge first.
+ */
 export type SyncKind = 'incremental' | 'full';
 
 /**
@@ -230,6 +238,14 @@ export interface SyncState {
   filesTotal: number;
   filesDone: number;
   recordsIngested: number;
+  /**
+   * ADR-019 — records this cycle offered that were already stored under the same `event_key`, so
+   * nothing was written twice. ⚠️ **Not the repeated-API-call count** (`Disclosures.repeatedApiCalls`,
+   * migration 0011): that one is several genuinely distinct records sharing one API call, which
+   * line identity correctly does not treat as duplicates. This is a per-cycle number and belongs
+   * here rather than in `Disclosures`, which describes the stored dataset.
+   */
+  recordsDeduplicated: number;
   badLines: number;
   queuedRescan: boolean; // a watcher event arrived mid-cycle (§5.2)
   lastCompletedAt: number | null;
@@ -938,6 +954,63 @@ export interface Disclosures {
   /** ADR-041 — events kept from those orphaned transcripts. The session count above is the one a
    * human reads; this is its event-level companion, also UNFILTERED. */
   retainedOrphanEvents: number;
+  /**
+   * ⚠️ **Migration 0011 (2026-07-24) — repeated API calls, measured; ADR-042 now ACTS on them.**
+   *
+   * Claude Code commonly writes one assistant turn as several JSONL lines that share one
+   * `message.id` and repeat (or, while streaming, accumulate) the same `usage`. Line-level identity
+   * (§3.5, ADR-019) is correct — they really are distinct records. ⚠️ **AMENDED 2026-07-24
+   * (ADR-042) — every token and cost total now sums each API call ONCE**, at its final line's usage
+   * (§5.9 M-02/M-04/M-05). This count is what remains: over the CHECKED population it reports how
+   * many records shared a call (now collapsed, not inflated); the unchecked/uncheckable counts are
+   * records with no call id, which cannot be collapsed and whose repeats are therefore still summed.
+   *
+   * UNFILTERED, like the A-05 counts and `retainedOrphan*`.
+   */
+  repeatedApiCalls: RepeatedApiCalls;
+}
+
+/**
+ * §4.6 (migration 0011) — the repeat count **and the coverage that makes it readable**.
+ *
+ * ⚠️⚠️ **`records: 0` alone is not evidence of anything, and this shape is what stops it being
+ * read as evidence.** Rows ingested before migration 0011 carry no API-call id and cannot be
+ * checked, so a lone `0` would be identical whether nothing repeats or nothing was ever
+ * examined — CLAUDE.md §1's silently-wrong number arriving as a disclosure. `checkedRecords` is
+ * the denominator, and **any renderer of `records` must render it against `checkedRecords`**:
+ * `checkedRecords === 0` is the "not measured" state and must never be presented as "none found".
+ *
+ * The two unchecked counts follow A-05's split exactly — one remedy that works, one honest
+ * admission that there is none.
+ */
+export interface RepeatedApiCalls {
+  /** Records sharing an API-call id with another record, over the checked population only. */
+  records: number;
+  /** Records the app was able to examine. `0` means nothing has been checked yet. */
+  checkedRecords: number;
+  /**
+   * Not checked, but their transcripts are still in the Claude data directory, so they *could*
+   * be checked if those files were re-read.
+   *
+   * ⚠️ **NOT IN NORMAL USE — THE USER HAS TO ASK.** A sync resumes from the stored byte offset
+   * and never re-reads a line it has already committed (§5.2 rule 3, §5.3 `GREW`); `kind: 'full'`
+   * does not change that — it only refuses to coalesce (§4.4). The one path that re-parses
+   * everything is the §3.18 purge.
+   *
+   * ⚠️ **AMENDED 2026-07-24 (A-16) — that path now has a control.** `sync:rebuild` runs the purge
+   * and a full cycle on the user's own explicit request (§6.10 card 4a), so these records CAN be
+   * reached and the disclosure names the remedy. It stays user-initiated and never automatic
+   * (ADR-032). Absent that, a record here is checked only if its file is rewritten or shortened
+   * (§5.3 `SHRANK`/`REWROTE`) or the directory changes.
+   */
+  uncheckedRecords: number;
+  /**
+   * ⚠️⚠️ Not checked and never checkable: archived or vanished transcripts. They are never
+   * re-parsed (§5.3 `ARCHIVED`, ADR-034/041), so no rebuild can reach them. Its own count and its
+   * own sentence, for exactly A-05's reason: telling the user to rebuild these would be advice
+   * that cannot work.
+   */
+  uncheckableRecords: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -1227,6 +1300,27 @@ export interface IpcChannels {
   'sync:start': { req: { kind: SyncKind }; res: SyncState };
   'sync:cancel': { req: void; res: SyncState };
   'sync:state': { req: void; res: SyncState };
+  /**
+   * ⚠️ **AMENDED 2026-07-24 (A-16) — the explicit rebuild §3.18 always named and nothing ever
+   * triggered.** §3.18's purge fires on "`claudeDir` changed, **or an explicit rebuild**", and
+   * §6.11 already specifies a *Rebuild derived data* control; until now the only live trigger was
+   * a change of Claude data directory (§5.1), so a line committed under an older build was never
+   * read again and anything the app learned to record afterwards never reached it.
+   *
+   * Runs §3.18's purge — **DERIVED only**, both RETAINED markers guarded (`archive_id IS NULL AND
+   * retained_orphan = 0`, ADR-033/041) and no USER table named (INV-12) — then starts one
+   * `kind: 'full'` cycle, exactly the pair §5.1's fingerprint-changed row runs. Progress arrives
+   * on `evt:sync` and `sync:cancel` stops it, like any other cycle.
+   *
+   * ⚠️ **Not a guarded action, and deliberately outside the ACT-01…07 catalogue** (§5.7, ADR-032):
+   * it writes no file, moves no file and deletes nothing the user owns — every row it removes is
+   * re-derivable from transcripts it does not touch. There is nothing for a restore point to hold
+   * (§5.5 rule 1), so it takes none and writes no `audit_log` row.
+   *
+   * ⚠️ `E_SYNC_BUSY` while a cycle is running: the purge would delete manifest rows that cycle is
+   * mid-way through writing. `E_NO_DIR` when no Claude data directory is configured.
+   */
+  'sync:rebuild': { req: void; res: SyncState };
 
   // ---- §4.5 Analytics queries ----
   'q:overviewTiles': { req: GlobalFilter; res: OverviewTiles };

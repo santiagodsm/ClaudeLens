@@ -79,6 +79,7 @@ export function createParseWorkerRuntime(options: ParseWorkerRuntimeOptions): Pa
               result: {
                 relPath: result.relPath,
                 recordsIngested: result.recordsIngested,
+                recordsDeduplicated: result.recordsDeduplicated,
                 badLinesDelta: result.badLines - request.file.startBadLines,
                 cancelled: result.cancelled,
               },

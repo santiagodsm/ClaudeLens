@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { SESSIONS_EMPTY_REASON, SessionsView } from '../../../src/renderer/views/SessionsView';
 import { useAppStore } from '../../../src/renderer/store/app-store';
+import { LIST_PRICE_SENTENCE } from '../../../src/renderer/views/shared/disclosures';
 import { DB_BUSY, ok, renderView, resetAll, uninstallBridge } from './view-harness';
 import {
   rhythmHeatmap,
@@ -235,6 +236,95 @@ describe('§6.5 Sessions & Time — the table', () => {
     renderView(<SessionsView />, stubs());
     await screen.findByTestId('sessions-table');
     expect(screen.queryByTestId('session-archived-badge')).not.toBeInTheDocument();
+  });
+
+  it('renders a costed session’s cost in its row', async () => {
+    renderView(<SessionsView />, stubs());
+    const rows = await screen.findAllByTestId('sessions-table-row');
+    // `sessionRow()` carries 1_500_000_000 nanoUSD; nanoUSD → USD happens once, at this edge
+    // (§3.11, ADR-023), so the cell reads $1.50 and the drawer's figure agrees with it.
+    expect(within(rows[0]!).getByText('$1.50')).toBeInTheDocument();
+  });
+
+  it('⚠️ renders an em dash, never $0.00, for a session nothing could be priced in', async () => {
+    // ⚠️ `costNanoUsd === null` means "no price row covered these records", which is a different
+    // fact from zero (§6.4, INV-09/10). A `$0.00` here would be a plausible number that is wrong
+    // — CLAUDE.md §1's worst outcome, with a currency symbol on it.
+    renderView(
+      <SessionsView />,
+      stubs({
+        'q:sessions': () =>
+          ok(
+            sessionsPage({
+              page: {
+                rows: [
+                  sessionRow({ id: 'sess-costed' }),
+                  sessionRow({ id: 'sess-unpriced', displayName: 'demo-beta', costNanoUsd: null }),
+                ],
+                nextCursor: null,
+                totalKnown: 2,
+              },
+              // The rows are unpriced because their records were, so the disclosure that names
+              // them travels with the table (INV-10).
+              uncosted: uncosted(4),
+            }),
+          ),
+      }),
+    );
+    const rows = await screen.findAllByTestId('sessions-table-row');
+
+    expect(within(rows[0]!).getByText('$1.50')).toBeInTheDocument();
+    expect(within(rows[1]!).getByText('—')).toBeInTheDocument();
+    expect(rows[1]?.textContent ?? '').not.toContain('$');
+    expect(screen.getByTestId('sessions-table').textContent ?? '').not.toContain('$0.00');
+  });
+
+  it('⚠️ gives the Cost header no sort control — the listing query cannot page on cost', async () => {
+    // §4.5's `SessionSort` has no cost member, so a sortable header would send `q:sessions` a key
+    // the contract rejects. The affordance is absent rather than broken, and stays absent.
+    const { bridge } = renderView(<SessionsView />, stubs());
+    await screen.findByTestId('sessions-table');
+
+    const header = screen.getByRole('columnheader', { name: 'Cost' });
+    expect(within(header).queryByRole('button')).not.toBeInTheDocument();
+    expect(header).not.toHaveAttribute('aria-sort');
+
+    // Its sortable neighbours still work, so this is a property of the Cost column alone.
+    fireEvent.click(screen.getByRole('button', { name: /Output/ }));
+    await waitFor(() => {
+      const last = bridge.calls.filter((call) => call.channel === 'q:sessions').at(-1);
+      expect((last?.request as { sort: string }).sort).toBe('outputTokens');
+    });
+    expect(
+      bridge.calls
+        .filter((call) => call.channel === 'q:sessions')
+        .every((call) => (call.request as { sort: string }).sort !== 'cost'),
+    ).toBe(true);
+  });
+
+  it('⚠️ carries the standing list-price caveat, because the table now shows $ (§6.12)', async () => {
+    renderView(<SessionsView />, stubs());
+    const card = await screen.findByTestId('sessions-table-card');
+    expect(within(card).getByTestId('list-price-disclosure')).toHaveTextContent(
+      LIST_PRICE_SENTENCE,
+    );
+    // §6.12 — adjacent to the figures, in flow, never hidden behind hover.
+    expect(within(card).getByTestId('list-price-disclosure')).not.toHaveAttribute('title');
+    // Standing, not data-dependent: nothing is uncosted here and it is present anyway.
+    expect(within(card).queryByTestId('uncosted-disclosure')).not.toBeInTheDocument();
+  });
+
+  it('keeps the standing caveat and adds the uncosted line when records are unpriced', async () => {
+    renderView(
+      <SessionsView />,
+      stubs({ 'q:sessions': () => ok(sessionsPage({ uncosted: uncosted(5) })) }),
+    );
+    const disclosure = await screen.findByTestId('sessions-table-card-disclosure');
+    // The uncosted line JOINS the standing one; it never replaces it.
+    expect(within(disclosure).getByTestId('list-price-disclosure')).toBeInTheDocument();
+    expect(within(disclosure).getByTestId('uncosted-disclosure')).toHaveTextContent(
+      '5 records uncosted',
+    );
   });
 
   it('renders the uncosted disclosure beside the table’s $ figures (INV-10)', async () => {

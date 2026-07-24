@@ -35,6 +35,7 @@
 // once and used by both queries below, so the `$` figure and its disclosure can never disagree
 // about which events they are talking about.
 
+import { API_CALL_ROWS_CTE } from './api-call-usage';
 import { Repository, sumToBigInt, sumToSafeNumber } from './base';
 import { rateAtPredicate } from './price-rows';
 import { PROJECT_UNIT_CTE } from './project-groups';
@@ -220,7 +221,12 @@ function classifiedCte(filterSql: string): string {
   // ⚠️ `project_id`, `session_id` and the ADR-021 local day are carried through so that
   // `totalsGroupedBy()` can group on them WITHOUT a second copy of the costing rules. They cost
   // nothing when unused: SQLite's query planner drops unreferenced CTE columns.
-  return `WITH ${RATE_SEGMENTS_CTE},
+  // ⚠️ ADR-042 — `api_call_rows`, not `events`: M-05 sums each API call ONCE, at its final line's
+  // authoritative usage, so a call written as several JSONL lines is costed once. The seam carries
+  // every `events` column and adds no bind params, so `PRICEABLE`, the filter and the project-unit
+  // join below are unchanged. M-06's uncosted count is now a count of CALLS, consistently.
+  return `WITH ${API_CALL_ROWS_CTE},
+${RATE_SEGMENTS_CTE},
 ${PROJECT_UNIT_CTE},
 scoped AS (
   SELECT e.id, e.model, e.ts, e.project_id, e.session_id,
@@ -233,7 +239,7 @@ scoped AS (
          -- pre-A-05 arithmetic for those rows, and disclosed rather than silently absorbed.
          COALESCE(e.tok_cache_write_1h, 0) AS tok_cache_write_1h,
          e.tok_cache_read
-  FROM   events e
+  FROM   api_call_rows e
   LEFT   JOIN project_unit u ON u.project_id = e.project_id
   WHERE  ${PRICEABLE}${filterSql}
 ),

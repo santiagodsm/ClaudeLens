@@ -19,6 +19,8 @@ import projectGroupsSql from './migrations/0007-project-groups.sql?raw';
 import subagentSpawnSidecarSql from './migrations/0008-subagent-spawn-sidecar.sql?raw';
 import retainOrphanedHistorySql from './migrations/0009-retain-orphaned-history.sql?raw';
 import harnessNodeVersionSql from './migrations/0010-harness-node-version.sql?raw';
+import apiCallIdSql from './migrations/0011-api-call-id.sql?raw';
+import apiCallDedupIndexSql from './migrations/0012-api-call-dedup-index.sql?raw';
 import { DbError } from './errors';
 import type { SqliteDatabase } from './sqlite';
 
@@ -87,6 +89,20 @@ export const MIGRATIONS: readonly Migration[] = [
   // own version, read from `plugin.json`, is the plain distinguisher `harnessGraph()` uses to
   // qualify ONLY the labels that collide. NOT part of node identity. See the file header.
   { version: 10, name: '0010-harness-node-version.sql', sql: harnessNodeVersionSql },
+  // §3.5/§3.2/§4.6 — `events.message_id` / `events.request_id`, plus `file_manifest`'s
+  // `api_ids_from_line` watermark. Claude Code writes one assistant turn as several JSONL lines
+  // that share one `message.id` and repeat the identical `usage`; line-level identity (ADR-019)
+  // is correct and every one of those lines is counted, so one API call is charged N times.
+  // ⚠️ This migration MEASURES that and changes no number: no metric definition, no costed
+  // population, no token sum. The watermark exists so "none found" and "not checked" can never
+  // be the same number. See the file header.
+  { version: 11, name: '0011-api-call-id.sql', sql: apiCallIdSql },
+  // ADR-042 / §3.5 / §5.9 M-02/M-04/M-05 — the covering index the "one row per API call" seam
+  // seeks on. 0011 MEASURED repeated usage; ADR-042 now sums each call once, at query time, using
+  // its final line's authoritative usage (`src/main/db/repositories/api-call-usage.ts`). This
+  // index answers the seam's anti-join ("no later line of my own call exists") from the index
+  // alone. Additive, changes no number by itself. See the file header. 0001–0011 untouched.
+  { version: 12, name: '0012-api-call-dedup-index.sql', sql: apiCallDedupIndexSql },
 ];
 
 /** The version the code expects a fully migrated database to be at. */
