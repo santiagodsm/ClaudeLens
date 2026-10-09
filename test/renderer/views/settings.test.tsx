@@ -11,6 +11,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import {
+  BILLING_CYCLE_EMPTY_NOTE,
+  BILLING_CYCLE_RANGE_NOTE,
+  BILLING_CYCLE_REFUSED_NOTE,
   COMMUNITY_PRICE_URL,
   IDLE_GAP_BOUNDARY_NOTE,
   IDLE_GAP_NOTE,
@@ -128,6 +131,164 @@ describe('§6.10 Settings — directory, idle gap, theme, re-sync', () => {
       expect(call?.request).toEqual({ key: 'idleGapMinutes', value: 30 });
     });
     expect(screen.getByTestId('idle-gap-value')).toHaveTextContent('30 min');
+  });
+
+  it('A-18 — explains the billing-cycle day in plain words, and offers only days 1–28', async () => {
+    renderView(<SettingsView />, stubs(), { settings: { billingCycleDay: 15 } });
+    const card = await screen.findByTestId('settings-card-billing-cycle');
+
+    /**
+     * §1a — what it changes and where, said in words. No metric id, no channel, no setting key.
+     *
+     * ⚠️ **Asserted as the WORDS ON SCREEN and not by reference to the constant.** Asserting the
+     * constant makes any rewrite of it — including a rewrite into something false — pass: this
+     * copy went on claiming the day affected "the totals at the top of the Overview screen" long
+     * after A-19 made it the time filter for all eight screens, and no test could see it.
+     */
+    expect(card).toHaveTextContent('This is the day your Claude bill starts on.');
+    expect(card).toHaveTextContent('Every screen is filtered by billing cycle');
+    expect(card).toHaveTextContent('cover the same period as the bill you receive');
+    // ⚠️ The claim that had become false: this setting is not an Overview-only one.
+    expect(card.textContent ?? '').not.toContain('the Overview screen');
+    expect(card).toHaveTextContent(BILLING_CYCLE_RANGE_NOTE);
+
+    const input = screen.getByTestId('billing-cycle-day-input');
+    expect(input).toHaveAttribute('min', '1');
+    expect(input).toHaveAttribute('max', '28');
+    expect(input).toHaveValue(15);
+  });
+
+  it('A-18 — persists a new billing-cycle day through settings:set', async () => {
+    const { bridge } = renderView(<SettingsView />, stubs(), {
+      settings: { billingCycleDay: 15 },
+    });
+    const input = screen.getByTestId('billing-cycle-day-input');
+
+    fireEvent.change(input, { target: { value: '3' } });
+    fireEvent.blur(input);
+
+    await waitFor(() => {
+      const call = bridge.calls.find((entry) => entry.channel === 'settings:set');
+      expect(call?.request).toEqual({ key: 'billingCycleDay', value: 3 });
+    });
+    await waitFor(() => {
+      expect(useAppStore.getState().settings?.billingCycleDay).toBe(3);
+    });
+  });
+
+  it('⚠️ A-18 — an out-of-range day is refused in plain words, never clamped to a legal one', async () => {
+    const { bridge } = renderView(
+      <SettingsView />,
+      stubs({
+        // ⚠️ The repository's real refusal, verbatim (`settings-repo.ts`): it names the setting
+        // KEY and its "type", which is our vocabulary. The wire message is not changed — it is
+        // simply not what the user is shown (§1a).
+        'settings:set': () => ({
+          ok: false as const,
+          error: {
+            code: 'E_INVALID_SETTING' as const,
+            message:
+              'The value provided for the setting "billingCycleDay" is not valid for its type.',
+            retryable: false,
+          },
+        }),
+      }),
+      { settings: { billingCycleDay: 15 } },
+    );
+    const input = screen.getByTestId('billing-cycle-day-input');
+
+    fireEvent.change(input, { target: { value: '31' } });
+    fireEvent.blur(input);
+
+    // The refusal is shown in the card's own words; the stored day is untouched. ⚠️ A clamp
+    // would have left the screen showing a cycle starting on a day the user never chose (§1).
+    expect(await screen.findByTestId('billing-cycle-error')).toHaveTextContent(
+      BILLING_CYCLE_REFUSED_NOTE,
+    );
+    expect(bridge.calls.some((entry) => entry.channel === 'settings:set')).toBe(true);
+    expect(useAppStore.getState().settings?.billingCycleDay).toBe(15);
+
+    // ⚠️ §1a — no internal identifier reaches the screen, whatever the main process called it.
+    const card = screen.getByTestId('settings-card-billing-cycle');
+    expect(card.textContent ?? '').not.toContain('billingCycleDay');
+    expect(card.textContent ?? '').not.toContain('for its type');
+  });
+
+  it('⚠️ A-18 — a fractional day is refused, not silently rounded to a whole one', async () => {
+    const { bridge } = renderView(<SettingsView />, stubs(), {
+      settings: { billingCycleDay: 15 },
+    });
+    const input = screen.getByTestId('billing-cycle-day-input');
+
+    fireEvent.change(input, { target: { value: '3.7' } });
+    fireEvent.blur(input);
+
+    // ⚠️ Truncating to 3 here would have persisted a day the user never typed, and the
+    // repository would never have seen anything to refuse (§1: never substitute).
+    expect(await screen.findByTestId('billing-cycle-error')).toHaveTextContent(
+      BILLING_CYCLE_REFUSED_NOTE,
+    );
+    expect(bridge.calls.some((entry) => entry.channel === 'settings:set')).toBe(false);
+    expect(useAppStore.getState().settings?.billingCycleDay).toBe(15);
+  });
+
+  it('⚠️ A-18 — an emptied field changes nothing, and says so instead of snapping back', async () => {
+    const { bridge } = renderView(<SettingsView />, stubs(), {
+      settings: { billingCycleDay: 15 },
+    });
+    const input = screen.getByTestId('billing-cycle-day-input');
+
+    fireEvent.change(input, { target: { value: '' } });
+    fireEvent.blur(input);
+
+    expect(await screen.findByTestId('billing-cycle-error')).toHaveTextContent(
+      BILLING_CYCLE_EMPTY_NOTE,
+    );
+    expect(bridge.calls.some((entry) => entry.channel === 'settings:set')).toBe(false);
+    expect(useAppStore.getState().settings?.billingCycleDay).toBe(15);
+    expect(input).toHaveValue(15);
+  });
+
+  it('⚠️ A-18 — a refusal does not outlive the value it was about', async () => {
+    let refuse = true;
+    renderView(
+      <SettingsView />,
+      stubs({
+        // Refuses the first attempt and accepts the second, which is the sequence a user makes
+        // when they mistype a day and then correct it.
+        'settings:set': () => {
+          if (refuse) {
+            return {
+              ok: false as const,
+              error: {
+                code: 'E_INVALID_SETTING' as const,
+                message:
+                  'The value provided for the setting "billingCycleDay" is not valid for its type.',
+                retryable: false,
+              },
+            };
+          }
+          return ok({ ...DEFAULT_SETTINGS, claudeDir: '/sandbox/claude', billingCycleDay: 7 });
+        },
+      }),
+      { settings: { billingCycleDay: 15 } },
+    );
+    const input = screen.getByTestId('billing-cycle-day-input');
+
+    fireEvent.change(input, { target: { value: '31' } });
+    fireEvent.blur(input);
+    await screen.findByTestId('billing-cycle-error');
+
+    // A legal day now goes through. ⚠️ The old refusal must go with it: an error line standing
+    // beside a value it does not describe explains the wrong thing (§1a).
+    refuse = false;
+    fireEvent.change(input, { target: { value: '7' } });
+    fireEvent.blur(input);
+
+    await waitFor(() => {
+      expect(useAppStore.getState().settings?.billingCycleDay).toBe(7);
+    });
+    expect(screen.queryByTestId('billing-cycle-error')).not.toBeInTheDocument();
   });
 
   it('offers System / Dark / Light and applies the choice', async () => {

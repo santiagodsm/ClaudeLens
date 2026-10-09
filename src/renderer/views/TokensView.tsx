@@ -33,6 +33,13 @@ import { ProjectDetailDrawer } from './shared/ProjectDetailDrawer';
 import { SegmentedControl } from './shared/SegmentedControl';
 import { SeriesLegend } from './shared/SeriesLegend';
 import { costDisclosureBlock, formatDay, suppressedBucketCount } from './shared/disclosures';
+import {
+  CycleTable,
+  cycleCostScope,
+  cycleTableScopeNote,
+  cyclesEmptyReason,
+  excludedCyclesNote,
+} from './shared/billing-cycles';
 
 /**
  * §6.4's standing note, verbatim. It stands whichever way the toggle is set, which is why it is
@@ -121,6 +128,9 @@ export function TokensView(): JSX.Element {
   const byProject = useQuery('q:tokensByProject', filter);
   const cost = useQuery('q:costBreakdown', { ...filter, by });
   const origin = useQuery('q:originSplit', filter);
+  // ⚠️ NOT `{ ...filter }`: this request has no date range to carry, deliberately — comparing
+  // cycles is its whole job while the control at the top is parked on one of them (§4.5, A-19).
+  const cycles = useQuery('q:billingCycleTotals', { projectIds: filter.projectIds });
 
   // ⚠️ The zoom presets set the GLOBAL date filter (reused, not duplicated). The window is
   // anchored to the newest data point rather than to the wall clock, so it never invents a
@@ -157,6 +167,16 @@ export function TokensView(): JSX.Element {
     if (costRows === undefined || costRows.length === 0) return null;
     return costRows.reduce((sum, row) => sum + row.costNanoUsd, 0);
   }, [costRows]);
+
+  // §4.6 — what the cap left out, said as what those cycles HOLD rather than as a bare count:
+  // the listed rows exclude real records, and a reader adding the rows up must be able to see
+  // where the difference went (A-19).
+  const cyclesExcluded =
+    cycles.data === null ? null : excludedCyclesNote(cycles.data.truncated, cycles.data.excluded);
+  // INV-10 — the `$` disclosure under this card covers exactly the rows on it: with cycles
+  // dropped by the cap, the payload's whole-scope summary would describe records the table does
+  // not show, and the note above is what accounts for the rest.
+  const cyclesCost = cycles.data === null ? null : cycleCostScope(cycles.data.cycles, cycles.data);
 
   const timelineTitle = mode === 'all' ? 'All tokens by model' : 'Output tokens by model';
 
@@ -355,6 +375,43 @@ export function TokensView(): JSX.Element {
             data-testid="tokens-origin-split"
           >
             {origin.data !== null ? <OriginDonut split={origin.data} /> : undefined}
+          </ChartCard>
+
+          {/* A-19 — **the card the whole amendment was asked for**: "I should be able to compare
+              across billing cycles, all of them, when I used more vs less" (2026-08-18).
+              ⚠️ It ignores the date chosen at the top BY DESIGN — the request type carries no
+              range at all — and says so in its own footer, because a card that quietly disobeys
+              the control above it is a number the reader will misattribute (§1a). */}
+          <ChartCard
+            title="Cost per billing cycle"
+            subtitle="Every cycle, newest first, with the change against the one before it"
+            className="col-span-12"
+            index={6}
+            loading={cycles.loading && cycles.data === null}
+            error={cycles.error}
+            empty={cycles.data !== null && cycles.data.cycles.length === 0}
+            // ⚠️ Empty cycles ARE in the payload, deliberately — so an empty list means the scope
+            // holds no records at all, and the scope includes the projects chosen at the top.
+            emptyReason={cyclesEmptyReason(filter.projectIds)}
+            onRetry={cycles.refetch}
+            // INV-10 — the disclosure travels with the `$`, exactly as it does on the Cost panel
+            // above: the standing list-price line first, then what was left out of these figures.
+            disclosure={
+              cyclesCost === null
+                ? undefined
+                : costDisclosureBlock(cyclesCost.costNanoUsd, cyclesCost.uncosted, disclosures)
+            }
+            footer={
+              <span data-testid="cycle-table-scope-note">
+                {cycleTableScopeNote(cycles.data?.cycles.length ?? 0, cycles.data?.truncated ?? 0)}
+                {cyclesExcluded === null ? '' : ` ${cyclesExcluded}`}
+              </span>
+            }
+            data-testid="tokens-billing-cycles"
+          >
+            {cycles.data !== null && cycles.data.cycles.length > 0 ? (
+              <CycleTable cycles={cycles.data.cycles} truncated={cycles.data.truncated} />
+            ) : undefined}
           </ChartCard>
         </>
       }

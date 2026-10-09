@@ -39,7 +39,8 @@ import { API_CALL_ROWS_CTE } from './api-call-usage';
 import { Repository, sumToBigInt, sumToSafeNumber } from './base';
 import { rateAtPredicate } from './price-rows';
 import { PROJECT_UNIT_CTE } from './project-groups';
-import { localDate } from './scope';
+import { billingCycleKeySql, billingCycleShift, localDate } from './scope';
+import { DbError } from '../errors';
 import { assertSafeAggregate, picoToNanoUsd } from '../../../shared/money';
 import type { SqlParam, SqliteDatabase } from '../sqlite';
 
@@ -92,7 +93,18 @@ export interface UncostedByModelRow {
  * are shared by construction. A grouped total and the ungrouped total over the same scope sum
  * to the same number because they are literally the same expression.
  */
-export type CostGrouping = 'model' | 'project' | 'day' | 'session';
+export type CostGrouping = 'model' | 'project' | 'day' | 'session' | 'cycle';
+
+/**
+ * A-19 — the billing-cycle grouping's one extra input: the day of the month the bill lands.
+ *
+ * ⚠️ Required for `by: 'cycle'` and **forbidden for every other grouping**, checked at the call
+ * rather than defaulted. A defaulted anchor day would silently bucket a user's spend into
+ * somebody else's month (§3.13, CLAUDE.md §1: never substitute).
+ */
+export interface CostGroupingOptions {
+  readonly anchorDay?: number;
+}
 
 /**
  * One group's M-05 total and the four class sums it was computed from.
@@ -274,7 +286,15 @@ SELECT
 FROM classified`;
 }
 
-/** The `classified` column each §4.5 grouping keys on. Closed set — never an interpolated caller value. */
+/**
+ * The `classified` expression each §4.5 grouping keys on. Closed set — never an interpolated
+ * caller value.
+ *
+ * ⚠️ A-19's `cycle` is the one entry that is not a bare column: it is `billingCycleKeySql` over
+ * the `local_day` the CTE already computed, so the cycle bucket and the day bucket are taken from
+ * the SAME local date, in the same zone, by construction (ADR-021). It carries one `?`
+ * (`anchorDay - 1`), which is why `groupedSql` binds a parameter for this grouping and no other.
+ */
 const GROUP_COLUMN: Readonly<Record<CostGrouping, string>> = {
   model: 'model',
   // ⚠️ ADR-040 — the UNIT, not the raw project. §6.4's cost breakdown by project reports one row
@@ -282,10 +302,34 @@ const GROUP_COLUMN: Readonly<Record<CostGrouping, string>> = {
   project: 'unit_id',
   day: 'local_day',
   session: 'session_id',
+  cycle: billingCycleKeySql('local_day'),
 };
 
 function groupedSql(filterSql: string, by: CostGrouping): string {
   const column = GROUP_COLUMN[by];
+  // ⚠️ `GROUP BY key` names the SELECT alias, not the expression again. For `cycle` that matters:
+  // repeating the expression would repeat its `?` and silently shift every later bind parameter.
+  //
+  // ⚠️⚠️ **A-19 changed this line for the four PRE-EXISTING groupings too** — `model`, `project`,
+  // `day` and `session` grouped on the bare column before, and now group on the alias, which is
+  // `CAST(<column> AS TEXT)`. That is not a free rewrite in SQLite: grouping compares values, and
+  // comparison depends on the collating sequence and on the storage class. It is nonetheless
+  // exactly equivalent here, for two reasons that were checked against the shipped SQLite rather
+  // than reasoned about:
+  //   · **Collation survives the CAST.** SQLite's rule is that "a column name preceded by one or
+  //     more unary '+' operators and/or CAST operators is still considered a column name" when a
+  //     collating function is assigned, so `CAST(x AS TEXT)` groups under `x`'s declared
+  //     collation. Verified directly against a `COLLATE NOCASE` column, which still folds case
+  //     after the cast — and moot besides, since no column any grouping keys on declares a
+  //     collation (`0007-project-groups.sql`'s index is on `project_groups.name`, which nothing
+  //     here groups by).
+  //   · **No two distinct values can collapse into one text.** `model`, `session_id` and the
+  //     `local_day` expression are TEXT (a TEXT-affinity column converts a numeric on the way in,
+  //     so `5` and `'5'` cannot coexist as distinct values), and `unit_id` is an INTEGER primary
+  //     key, on which `CAST(… AS TEXT)` is injective. `NULL` casts to `NULL` and stays its own
+  //     group either way.
+  // `test/main/db/group-by-alias.test.ts` pins both against the real driver, so a SQLite upgrade
+  // that changed either would fail loudly instead of silently re-partitioning four channels.
   return `${classifiedCte(filterSql)}
 SELECT CAST(${column} AS TEXT) AS key,
   COALESCE(SUM(
@@ -303,8 +347,25 @@ SELECT CAST(${column} AS TEXT) AS key,
   COALESCE(SUM(tok_cache_read), 0)   AS tok_cache_read
 FROM classified
 WHERE costed = 1
-GROUP BY ${column}
+GROUP BY key
 ORDER BY cost_picousd DESC, key ASC`;
+}
+
+/**
+ * A-19 — M-06 **per billing cycle**: how many records in each cycle had no covering price row.
+ *
+ * ⚠️ Same `classified` CTE, same `costed` flag, same rows as the money above — only the sign of
+ * the predicate differs. That is what makes a cycle's `$` and the disclosure travelling with it
+ * (INV-10) provably talk about the same events, rather than two counts that happen to agree on
+ * the data anyone tried.
+ */
+function uncostedByCycleSql(filterSql: string): string {
+  return `${classifiedCte(filterSql)}
+SELECT CAST(${GROUP_COLUMN.cycle} AS TEXT) AS key, COUNT(*) AS records
+FROM   classified
+WHERE  costed = 0
+GROUP BY key
+ORDER BY key ASC`;
 }
 
 function uncostedSql(filterSql: string): string {
@@ -447,6 +508,32 @@ export function costToWire(costPicoUsd: bigint, costedEvents: number): number | 
   );
 }
 
+/**
+ * A-19 — the bind parameters a grouping needs beyond the filter's, in SQL text order.
+ *
+ * ⚠️ The shift is `anchorDay - 1` days, and the range check is repeated here rather than trusted
+ * from the settings layer: this is the value that decides which month a dollar lands in, and a
+ * `0` or a `31` arriving from a caller that skipped validation would move every boundary without
+ * failing anything (§3.13, CLAUDE.md §1). `MIN`/`MAX_BILLING_CYCLE_DAY` are the shared constants,
+ * so the SQL side and the window arithmetic cannot disagree about what is legal.
+ */
+function groupingParams(by: CostGrouping, options: CostGroupingOptions): SqlParam[] {
+  if (by !== 'cycle') {
+    if (options.anchorDay !== undefined) {
+      throw new DbError(
+        'E_INTERNAL',
+        `A billing-cycle day was supplied for the '${by}' grouping, which does not use one.`,
+        { retryable: false },
+      );
+    }
+    return [];
+  }
+  // ⚠️ `billingCycleShift` is the ONE place the anchor day is validated and turned into the
+  // shift the SQL binds, shared with `event-stats.ts` — two validations could disagree about
+  // what is legal, and the looser one would silently decide a boundary.
+  return [billingCycleShift(options.anchorDay ?? Number.NaN)];
+}
+
 export class CostRepository extends Repository {
   constructor(db: SqliteDatabase) {
     super(db);
@@ -488,20 +575,43 @@ export class CostRepository extends Repository {
    * total does, so `q:costBreakdown` and every per-row `$` had the same bug. The picoUSD sum
    * leaves SQL as a `bigint` and is converted once, by `costToWire`/`picoToNanoUsd`.
    */
-  totalsGroupedBy(scope: CostScope, by: CostGrouping): CostGroupRow[] {
+  totalsGroupedBy(
+    scope: CostScope,
+    by: CostGrouping,
+    options: CostGroupingOptions = {},
+  ): CostGroupRow[] {
     const filter = buildFilter(scope);
-    return this.allExact<GroupedRecord>(groupedSql(filter.sql, by), ...filter.params).map(
-      (row) => ({
-        key: row.key,
-        costPicoUsd: sumToBigInt(row.cost_picousd, 'costPicoUsd'),
-        costedEvents: sumToSafeNumber(row.costed_events, 'costedEvents'),
-        tokInput: sumToSafeNumber(row.tok_input, 'tokInput'),
-        tokOutput: sumToSafeNumber(row.tok_output, 'tokOutput'),
-        tokCacheWrite: sumToSafeNumber(row.tok_cache_write, 'tokCacheWrite'),
-        tokCacheWrite1h: sumToSafeNumber(row.tok_cache_write_1h, 'tokCacheWrite1h'),
-        tokCacheRead: sumToSafeNumber(row.tok_cache_read, 'tokCacheRead'),
-      }),
-    );
+    return this.allExact<GroupedRecord>(
+      groupedSql(filter.sql, by),
+      ...filter.params,
+      ...groupingParams(by, options),
+    ).map((row) => ({
+      key: row.key,
+      costPicoUsd: sumToBigInt(row.cost_picousd, 'costPicoUsd'),
+      costedEvents: sumToSafeNumber(row.costed_events, 'costedEvents'),
+      tokInput: sumToSafeNumber(row.tok_input, 'tokInput'),
+      tokOutput: sumToSafeNumber(row.tok_output, 'tokOutput'),
+      tokCacheWrite: sumToSafeNumber(row.tok_cache_write, 'tokCacheWrite'),
+      tokCacheWrite1h: sumToSafeNumber(row.tok_cache_write_1h, 'tokCacheWrite1h'),
+      tokCacheRead: sumToSafeNumber(row.tok_cache_read, 'tokCacheRead'),
+    }));
+  }
+
+  /**
+   * A-19 — M-06 grouped by billing cycle, so each cycle's `$` can carry its own disclosure.
+   *
+   * ⚠️ Cycles with no uncosted record are simply absent from these rows; the caller reads a
+   * missing key as `0`, which is a **measured** zero here — the query counted every classified
+   * row and found none uncosted in that cycle — and not the "unknown" that INV-09 forbids
+   * dressing up as a number. The `$` beside it uses the opposite rule and stays `null`.
+   */
+  uncostedByCycle(scope: CostScope, anchorDay: number): { key: string; records: number }[] {
+    const filter = buildFilter(scope);
+    return this.all<{ readonly key: string; readonly records: number }>(
+      uncostedByCycleSql(filter.sql),
+      ...filter.params,
+      ...groupingParams('cycle', { anchorDay }),
+    ).map((row) => ({ key: row.key, records: row.records }));
   }
 
   /** M-06 — the excluded events, grouped by model with `MIN(ts)`/`MAX(ts)`. */

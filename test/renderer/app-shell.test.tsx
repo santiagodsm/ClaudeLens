@@ -114,7 +114,9 @@ describe('the shell', () => {
 
     expect(screen.getByTestId('app-topbar')).toBeInTheDocument();
     expect(screen.getByTestId('project-filter')).toBeInTheDocument();
-    expect(screen.getByTestId('date-range-filter')).toBeInTheDocument();
+    // A-19 — the date-range presets became the billing-cycle picker; there is no other range control.
+    expect(screen.getByTestId('cycle-filter')).toBeInTheDocument();
+    expect(screen.queryByTestId('date-range-filter')).not.toBeInTheDocument();
     expect(screen.getByTestId('refresh-button')).toBeInTheDocument();
     expect(screen.getByTestId('theme-toggle')).toBeInTheDocument();
     // P-30 — every icon button carries an aria-label.

@@ -19,7 +19,7 @@ import { invokeWith } from '../lib/ipc';
 import { scopesFor } from '../lib/query-scopes';
 import { useAppStore } from '../store/app-store';
 
-export interface QueryState<T> {
+export interface QueryState<T, R = unknown> {
   /**
    * A request is in flight. ⚠️ `loading === true` with `data !== null` is a **refresh in
    * place**: the view keeps rendering the numbers it has and must NOT swap in a skeleton.
@@ -29,6 +29,14 @@ export interface QueryState<T> {
   loading: boolean;
   data: T | null;
   error: AppError | null;
+  /**
+   * ⚠️ The request that produced the `data` being returned right now — which during a refresh in
+   * place is the PREVIOUS request, not the one in flight. A view that captions its numbers with
+   * the window it is currently *asking* for would, for one round trip, name a period the totals
+   * on screen were not counted over: a caption that describes numbers it does not belong to is
+   * the same defect as a wrong number (CLAUDE.md §1/§1a). `null` whenever `data` is `null`.
+   */
+  dataRequest: R | null;
   /** Explicit re-query. Wired to the ErrorState retry button; never called automatically. */
   refetch: () => void;
 }
@@ -60,9 +68,13 @@ export interface QueryOptions {
   enabled?: boolean;
 }
 
-/** One settled answer, tagged with the key it answers, so a stale reply cannot be mistaken. */
-interface Settled<T> {
+/**
+ * One settled answer, tagged with the key it answers, so a stale reply cannot be mistaken — and
+ * with the request that produced it, so a view can describe the payload it is actually showing.
+ */
+interface Settled<T, R> {
   key: string;
+  request: R | null;
   data: T | null;
   error: AppError | null;
 }
@@ -71,7 +83,7 @@ export function useQuery<C extends IpcChannel>(
   channel: C,
   request: IpcRequest<C>,
   options: QueryOptions = {},
-): QueryState<IpcResponse<C>> {
+): QueryState<IpcResponse<C>, IpcRequest<C>> {
   const enabled = options.enabled ?? true;
   const serialized = stableStringify(request);
 
@@ -85,7 +97,7 @@ export function useQuery<C extends IpcChannel>(
   const [nonce, setNonce] = useState(0);
   const key = `${channel}|${serialized}|${String(epoch)}|${String(nonce)}`;
 
-  const [settled, setSettled] = useState<Settled<IpcResponse<C>> | null>(null);
+  const [settled, setSettled] = useState<Settled<IpcResponse<C>, IpcRequest<C>> | null>(null);
 
   useEffect(() => {
     if (!enabled) return;
@@ -102,8 +114,8 @@ export function useQuery<C extends IpcChannel>(
       // query that produced it failed is a number nothing is standing behind.
       setSettled(
         result.ok
-          ? { key, data: result.data, error: null }
-          : { key, data: null, error: result.error },
+          ? { key, request: parsed ?? null, data: result.data, error: null }
+          : { key, request: parsed ?? null, data: null, error: result.error },
       );
     });
 
@@ -120,10 +132,14 @@ export function useQuery<C extends IpcChannel>(
   // does not answer the current key. That is also what keeps the previous payload on screen
   // during a refresh — `data` reads from `settled` regardless of whether its key is current.
   const current = settled !== null && settled.key === key;
+  const data = enabled ? (settled?.data ?? null) : null;
   return {
     loading: enabled && !current,
-    data: enabled ? (settled?.data ?? null) : null,
+    data,
     error: enabled && current ? settled.error : null,
+    // Travels with `data` and only with `data`: there is no request to name when there is
+    // nothing on screen that it produced.
+    dataRequest: data === null ? null : (settled?.request ?? null),
     refetch,
   };
 }

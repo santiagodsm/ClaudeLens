@@ -45,3 +45,23 @@ export function usePinnedTimezone(zone: string = FIXTURE_TZ): void {
 export function assertTimezonePinned(): void {
   expect(new Date(LOCAL_0900_ON_2024_05_01).getHours()).toBe(9);
 }
+
+/**
+ * A-18 — the zone the billing-cycle boundaries are proved in. ⚠️ Deliberately NOT `Asia/Tokyo`:
+ * a cycle that spans a daylight-saving change is exactly the case where "add 24 h" and "the next
+ * local midnight" disagree, and a zone with no DST rule can never show that difference. In 2026
+ * `America/New_York` moves to EDT on 8 March and back to EST on 1 November, so a February and an
+ * October cycle each straddle one transition.
+ */
+export const DST_TZ = 'America/New_York';
+
+/**
+ * Proves the `DST_TZ` pin took effect, on BOTH sides of the rule, before any expected value
+ * depends on it: 2026-01-15T05:00Z is local midnight in EST (UTC-5) and 2026-07-15T04:00Z is
+ * local midnight in EDT (UTC-4). A zone pinned to only one offset would pass one and fail the
+ * other, which is the failure that must be loud rather than silent.
+ */
+export function assertDstTimezonePinned(): void {
+  expect(new Date(Date.parse('2026-01-15T05:00:00.000Z')).getHours()).toBe(0);
+  expect(new Date(Date.parse('2026-07-15T04:00:00.000Z')).getHours()).toBe(0);
+}

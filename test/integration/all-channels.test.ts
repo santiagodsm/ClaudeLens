@@ -250,6 +250,22 @@ const CHANNEL_PLAN: ChannelPlan = {
       hasUncosted(data);
     },
   },
+  'q:billingCycleTotals': {
+    // A-19 — no `GlobalFilter` here by design: the request type carries no date range at all, and
+    // no billing day either. The day is read from `settings` in the main process and echoed back,
+    // so a caller cannot ask for cycles on boundaries the rest of the app is not using.
+    request: () => ({ projectIds: null }),
+    shape: (data) => {
+      hasUncosted(data);
+      expect(data.anchorDay).toBe(15); // the documented default, unchanged by this suite
+      expect(Array.isArray(data.cycles)).toBe(true);
+      expect(data.truncated).toBe(0);
+      // Consecutive, newest first — the partition property, over real parsed data.
+      for (let index = 0; index + 1 < data.cycles.length; index += 1) {
+        expect(data.cycles[index]?.from).toBe(data.cycles[index + 1]?.to);
+      }
+    },
+  },
   'q:sessionHistogram': {
     request: () => ALL_FILTER,
     shape: (data) => {

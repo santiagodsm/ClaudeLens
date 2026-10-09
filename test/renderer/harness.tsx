@@ -93,6 +93,10 @@ export const DEFAULT_SETTINGS: SettingsSnapshot = {
   reduceMotionOverride: 'system',
   retainOrphanedHistory: true,
   efficiencyDropThreshold: 0.4, // A-12
+  billingCycleDay: 15, // A-18 — the day the user's Claude bill lands
+  // A-19 — the app opens on the billing cycle the clock is in, and stores the CHOICE, never the
+  // two dates it resolved to.
+  lastRangeChoice: 'cycle:current',
 };
 
 /**
@@ -162,6 +166,7 @@ export function resetStore(): void {
     sync: null,
     disclosures: null,
     filter: ALL_TIME_ALL_PROJECTS,
+    rangeChoice: null,
     theme: 'system',
     reduceMotion: 'system',
     sidebarCollapsed: false,

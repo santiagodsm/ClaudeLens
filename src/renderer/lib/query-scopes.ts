@@ -28,6 +28,10 @@ const SCOPES: Partial<Record<IpcChannel, DataScope[]>> = {
   // which a grouping change moves).
   'q:contextOverhead': ['events', 'sessions', 'projects'],
   'q:costBreakdown': ['events', 'projects'],
+  // A-19 — per-cycle money and tokens (events), the distinct-session count (sessions) and the
+  // project expansion a grouping change moves (projects). Mapped explicitly rather than left to
+  // the every-scope fallback, which would re-run it on a harness scan that cannot move it.
+  'q:billingCycleTotals': ['events', 'sessions', 'projects'],
   'q:sessionHistogram': ['sessions', 'events'],
   'q:rhythmHeatmap': ['events'],
   'q:workingDays': ['sessions', 'events', 'projects'],

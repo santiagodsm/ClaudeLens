@@ -15,7 +15,13 @@
 import type { JSX, ReactNode } from 'react';
 import { Link } from 'react-router';
 import type { Disclosures, UncostedSummary } from '../../../shared/ipc-contract';
-import { formatDuration, formatInteger } from '../../lib/format';
+import { formatDay, formatDuration, formatInteger } from '../../lib/format';
+
+// ⚠️ A-18 — `formatDay` now lives in `lib/format.ts` (the presentation edge), because
+// `lib/billing-cycle.ts` needs the same date rendering and a pure module must not import a view.
+// Re-exported here so every existing caller keeps its import path and there is still exactly one
+// definition of how this application writes a calendar date.
+export { formatDay };
 
 /**
  * §6.4 — "If **no** price row covers **any** record, the panel renders *'No pricing configured
@@ -66,15 +72,6 @@ export const REREAD_SETTINGS_PATH = '/settings#reread';
 
 /** §6.5/§6.12 — the caption on a hatched, pre-transcript chart region. */
 export const PARTIAL_CAPTION = 'prompts only — no transcript detail';
-
-/** A local calendar date, for the M-06 range and the M-16 boundary (ADR-021: local time). */
-export function formatDay(epochMs: number): string {
-  return new Date(epochMs).toLocaleDateString(undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: '2-digit',
-  });
-}
 
 export interface UncostedLineProps {
   uncosted: UncostedSummary;

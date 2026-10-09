@@ -38,6 +38,8 @@ import { resolve } from 'node:path';
 import type {
   AppBootstrap,
   AppError,
+  BillingCycleTotals,
+  BillingCycleTotalsRequest,
   DataScope,
   DirStatus,
   DirValidation,
@@ -810,6 +812,31 @@ export class DatasetService {
       records: this.cost.totals(scope).uncostedEvents,
       byModel: this.cost.uncostedByModel(scope),
     };
+  }
+
+  /**
+   * §4.5 `q:billingCycleTotals` (A-19) — every billing cycle's totals.
+   *
+   * ⚠️ The request carries no date range **by type** (`BillingCycleTotalsRequest`), so there is
+   * nothing here to ignore: the filter handed down is the project selection and nothing else.
+   *
+   * ⚠️ **The anchor day is read from `settings` here, never taken from the request**, for the
+   * same reason `idleGapMinutes` is (see `queryContext` below): a renderer surface holding a
+   * settings snapshot from before the user changed their billing day would ask for cycles on the
+   * old boundaries while the control at the top of the app resolved the new ones, and the same
+   * month would show two different totals with nothing failing (CLAUDE.md §1). The request type
+   * has no field for it, so the skew cannot be expressed; the resolved day is echoed back in the
+   * payload so a caption can name what the numbers were actually bucketed on.
+   *
+   * ⚠️ `now` comes from the injected clock, like every other instant in this build — a repository
+   * that read `Date.now()` itself could not be tested against a fixed calendar (ADR-021).
+   */
+  billingCycleTotals(request: BillingCycleTotalsRequest): BillingCycleTotals {
+    return this.analytics.billingCycleTotals(
+      this.queryContext({ projectIds: request.projectIds, from: null, to: null }),
+      this.settingsSnapshot().billingCycleDay,
+      this.#now(),
+    );
   }
 
   /**

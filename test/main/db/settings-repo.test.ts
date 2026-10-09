@@ -40,10 +40,12 @@ describe('SettingsRepository (§3.13)', () => {
   it('declares exactly the keys of §3.13, with the documented defaults', () => {
     expect([...SETTING_KEYS].toSorted()).toEqual([
       'archiveRoot',
+      'billingCycleDay',
       'claudeDir',
       'efficiencyDropThreshold',
       'idleGapMinutes',
       'lastGlobalFilter',
+      'lastRangeChoice',
       'priceFetchUrl',
       'reduceMotionOverride',
       'retainOrphanedHistory',
@@ -63,6 +65,8 @@ describe('SettingsRepository (§3.13)', () => {
       reduceMotionOverride: 'system',
       retainOrphanedHistory: true, // ADR-041 — keep history by default (never auto-deletes)
       efficiencyDropThreshold: 0.4, // A-12 — flag below 40% of the session's starting efficiency
+      billingCycleDay: 15, // A-18 — the day the user's Claude bill lands
+      lastRangeChoice: 'cycle:current', // A-19 — the app opens on the current billing cycle
     });
     // Defaults come from the table, not from the read path inventing them.
     expect(countRows(dbs.openMigrated(), 'settings')).toBe(0);
@@ -81,7 +85,9 @@ describe('SettingsRepository (§3.13)', () => {
     repo.set('sidebarCollapsed', true, T0);
     repo.set('reduceMotionOverride', 'reduce', T0);
     repo.set('retainOrphanedHistory', false, T0);
-    const snapshot = repo.set('efficiencyDropThreshold', 0.6, T0);
+    repo.set('efficiencyDropThreshold', 0.6, T0);
+    repo.set('billingCycleDay', 3, T0);
+    const snapshot = repo.set('lastRangeChoice', 'cycle:1755230400000', T0);
 
     expect(snapshot).toEqual({
       claudeDir: '/sandbox/data/.claude',
@@ -94,6 +100,8 @@ describe('SettingsRepository (§3.13)', () => {
       reduceMotionOverride: 'reduce',
       retainOrphanedHistory: false, // ADR-041 — flips off the keep-history default
       efficiencyDropThreshold: 0.6, // A-12 — round-trips as a fraction
+      billingCycleDay: 3, // A-18 — round-trips as a whole day of the month
+      lastRangeChoice: 'cycle:1755230400000', // A-19 — one specific cycle, by the ms it opens on
     });
     expect(repo.get('idleGapMinutes')).toBe(30);
   });
@@ -158,6 +166,64 @@ describe('SettingsRepository (§3.13)', () => {
       'E_INVALID_SETTING',
     );
     expect(codeOf(() => repo.set('efficiencyDropThreshold', '0.4', T0))).toBe('E_INVALID_SETTING');
+  });
+
+  it('A-19 — lastRangeChoice: the three legal shapes, and rejection of everything else', () => {
+    const repo = new SettingsRepository(dbs.openMigrated());
+
+    // ⚠️ The default is the CURRENT cycle, not a stored pair of dates: a cycle persisted as two
+    // absolute midnights would reopen the app on the window that has since closed (A-19).
+    expect(repo.snapshot().lastRangeChoice).toBe('cycle:current');
+    expect(SETTING_DEFINITIONS.lastRangeChoice.defaultValue).toBe('cycle:current');
+
+    expect(repo.set('lastRangeChoice', 'all', T0).lastRangeChoice).toBe('all');
+    expect(repo.set('lastRangeChoice', 'cycle:current', T0).lastRangeChoice).toBe('cycle:current');
+    expect(repo.set('lastRangeChoice', 'cycle:0', T0).lastRangeChoice).toBe('cycle:0');
+    expect(repo.set('lastRangeChoice', 'cycle:1755230400000', T0).lastRangeChoice).toBe(
+      'cycle:1755230400000',
+    );
+
+    // Rejected, never coerced (§3.13, CLAUDE.md §1): a cycle whose instant cannot be read is not
+    // a range with a repairable typo, and honouring it approximately would filter every screen
+    // to a window nobody chose.
+    expect(codeOf(() => repo.set('lastRangeChoice', 'cycle:', T0))).toBe('E_INVALID_SETTING');
+    expect(codeOf(() => repo.set('lastRangeChoice', 'cycle:abc', T0))).toBe('E_INVALID_SETTING');
+    expect(codeOf(() => repo.set('lastRangeChoice', 'cycle:1.5', T0))).toBe('E_INVALID_SETTING');
+    expect(codeOf(() => repo.set('lastRangeChoice', 'cycle:NaN', T0))).toBe('E_INVALID_SETTING');
+    expect(codeOf(() => repo.set('lastRangeChoice', 'last7', T0))).toBe('E_INVALID_SETTING');
+    expect(codeOf(() => repo.set('lastRangeChoice', '', T0))).toBe('E_INVALID_SETTING');
+    expect(codeOf(() => repo.set('lastRangeChoice', 15, T0))).toBe('E_INVALID_SETTING');
+    expect(codeOf(() => repo.set('lastRangeChoice', null, T0))).toBe('E_INVALID_SETTING');
+
+    // The last accepted write stands; nothing above it was written.
+    expect(repo.snapshot().lastRangeChoice).toBe('cycle:1755230400000');
+  });
+
+  it('A-18 — billingCycleDay: default 15, the 1–28 boundaries, and rejection outside them', () => {
+    const repo = new SettingsRepository(dbs.openMigrated());
+
+    // The user receives their Claude bill on the 15th, and that is the shipped default (A-18).
+    expect(repo.snapshot().billingCycleDay).toBe(15);
+    expect(SETTING_DEFINITIONS.billingCycleDay.defaultValue).toBe(15);
+
+    // Both boundaries are accepted, exactly.
+    expect(repo.set('billingCycleDay', 1, T0).billingCycleDay).toBe(1);
+    expect(repo.set('billingCycleDay', 28, T0).billingCycleDay).toBe(28);
+
+    // ⚠️ Out of range is REJECTED, not clamped, and not rounded (§1: never substitute). The
+    // discriminator: a clamp would have returned 1 for 0 and 28 for 29/31, and a round would
+    // have accepted 15.5 as 16 — a billing cycle starting on a day the user did not choose.
+    expect(codeOf(() => repo.set('billingCycleDay', 0, T0))).toBe('E_INVALID_SETTING');
+    expect(codeOf(() => repo.set('billingCycleDay', 29, T0))).toBe('E_INVALID_SETTING');
+    expect(codeOf(() => repo.set('billingCycleDay', 31, T0))).toBe('E_INVALID_SETTING');
+    expect(codeOf(() => repo.set('billingCycleDay', 15.5, T0))).toBe('E_INVALID_SETTING');
+    expect(codeOf(() => repo.set('billingCycleDay', -15, T0))).toBe('E_INVALID_SETTING');
+    expect(codeOf(() => repo.set('billingCycleDay', Number.NaN, T0))).toBe('E_INVALID_SETTING');
+    expect(codeOf(() => repo.set('billingCycleDay', '15', T0))).toBe('E_INVALID_SETTING');
+    expect(codeOf(() => repo.set('billingCycleDay', null, T0))).toBe('E_INVALID_SETTING');
+
+    // The last value that WAS valid still stands — a refused write changes nothing.
+    expect(repo.snapshot().billingCycleDay).toBe(28);
   });
 
   it('ignores an unknown key already present in the table (§3.13, read side)', () => {

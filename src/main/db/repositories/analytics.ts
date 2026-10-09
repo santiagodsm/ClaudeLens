@@ -27,12 +27,20 @@ import {
   SessionStatsRepository,
 } from './session-stats';
 import { ToolStatsRepository } from './tool-stats';
-import { pageFrom, type QueryContext } from './scope';
+import { assertBillingCycleDay, pageFrom, type QueryContext } from './scope';
+import {
+  billingCycleKey,
+  cycleDayCounts,
+  cyclesBetween,
+  isCycleInProgress,
+} from '../../../shared/billing-cycle';
 import { picoToNanoUsd, assertSafeAggregate } from '../../../shared/money';
 import { colorIndexFor } from '../../../shared/color-index';
 import type { SqliteDatabase } from '../sqlite';
 import type {
   ActivityCalendar,
+  BillingCycleRow,
+  BillingCycleTotals,
   CacheEfficiency,
   ClaudeMdFiles,
   ContextOverhead,
@@ -40,6 +48,7 @@ import type {
   CostBreakdownBy,
   DataCoverage,
   Disclosures,
+  ExcludedCycleTotals,
   ExecutionTrace,
   FileMetricRow,
   FlowSankey,
@@ -231,6 +240,147 @@ export class AnalyticsRepository {
       },
     }));
     return { rows, uncosted: this.#uncostedSummary(context.filter) };
+  }
+
+  /**
+   * `q:billingCycleTotals` (§6.3, §6.4 — A-19) — one row per billing cycle, newest first.
+   *
+   * ⚠️ **Nothing here is a second implementation of anything.** The money and its M-06 disclosure
+   * come from E5's `classified` CTE with a `GROUP BY` on the cycle (so INV-09's all-or-nothing
+   * rule is shared by construction with every other `$` in the app); the token sums and the
+   * session count come from the same `EventStatsRepository` population the Overview tiles read,
+   * so the row for a cycle and the tiles for that same cycle cannot disagree; and the active
+   * seconds are M-07 binding (C), the same reading, restricted to the cycle by a calendar fact
+   * (see `active-time.ts`'s `workingDayByCycleSql`). This method only joins them on the cycle key
+   * and fills in the cycles the data does not mention.
+   *
+   * ⚠️ **The calendar comes from the clock, the numbers come from the data, and they are joined
+   * on a key computed twice — once in SQL from each record's local date, once here from each
+   * window's own start.** The golden fixture pins the two against each other; a mismatch on a key
+   * the cap did not drop is a programming fault and throws, because the alternative is a cycle's
+   * records quietly vanishing from a comparison of cycles (CLAUDE.md §1).
+   *
+   * ⚠️ The cycle list is built out to `max(last record, now)`, not just to `now`: a transcript
+   * can carry a timestamp ahead of the wall clock, and a list that stopped at the clock would
+   * leave those records in no cycle at all.
+   *
+   * ⚠️ **When the cap does bite, what falls outside the listed windows is measured and returned**
+   * (`excluded`), not merely counted as "N older cycles". `uncosted` covers the whole scope, so a
+   * payload that listed some cycles and disclosed all of the uncosted records would put two
+   * figures on one screen that do not add up, explained by nothing (§4.6, CLAUDE.md §1).
+   *
+   * ⚠️ The anchor day is checked HERE, before the calendar is built, so one illegal day has one
+   * error and one code: without it the `RangeError` from the shared window arithmetic ran first
+   * and reached IPC as `E_INTERNAL`, while the `E_INVALID_SETTING` the repositories raise was
+   * unreachable on this path.
+   */
+  billingCycleTotals(context: QueryContext, anchorDay: number, now: number): BillingCycleTotals {
+    assertBillingCycleDay(anchorDay);
+    const bounds = this.#events.bounds(context);
+    const series = cyclesBetween(anchorDay, bounds.firstTs, Math.max(bounds.lastTs ?? now, now));
+
+    const costByCycle = new Map(
+      this.#cost
+        .totalsGroupedBy(context.filter, 'cycle', { anchorDay })
+        .map((group) => [group.key, group]),
+    );
+    const uncostedByCycle = new Map(
+      this.#cost.uncostedByCycle(context.filter, anchorDay).map((row) => [row.key, row.records]),
+    );
+    const tokensByCycle = new Map(
+      this.#events.byBillingCycle(context, anchorDay).map((row) => [row.key, row]),
+    );
+    const activeByCycle = this.#active.bindingCSecondsByBillingCycle(context, anchorDay);
+
+    const known = new Set<string>();
+    const cycles: BillingCycleRow[] = series.cycles.map((window) => {
+      const key = billingCycleKey(window);
+      known.add(key);
+      const cost = costByCycle.get(key);
+      const tokens = tokensByCycle.get(key);
+      const days = cycleDayCounts(window, now);
+      return {
+        from: window.from,
+        to: window.to,
+        // ⚠️ `costToWire` with a `0n`/`0` pair yields `null`, which is the rule for BOTH "nothing
+        // here could be priced" and "nothing here happened" — §6.4 shows no `$` in either case,
+        // and the fields beside it are what tell the two apart.
+        costNanoUsd: costToWire(cost?.costPicoUsd ?? 0n, cost?.costedEvents ?? 0),
+        uncostedRecords: uncostedByCycle.get(key) ?? 0,
+        outputTokens: tokens?.output ?? 0,
+        cacheReadTokens: tokens?.cacheRead ?? 0,
+        inputTokens: tokens?.input ?? 0,
+        sessions: tokens?.sessions ?? 0,
+        activeSeconds: activeByCycle.get(key) ?? 0,
+        inProgress: isCycleInProgress(window, now),
+        elapsedDays: days.elapsedDays,
+        totalDays: days.totalDays,
+      };
+    });
+
+    // Every key the DATA produced that the CALENDAR did not list. When the cap did not bite there
+    // can be none — the list spans the first record to the last — and one appearing would mean a
+    // cycle's records had dropped out of the comparison with nothing on screen to say so, so it
+    // is a fault rather than a disclosure. When the cap DID bite, these are precisely the cycles
+    // it dropped, and their totals are what `excluded` reports (A-19, §4.6).
+    const dropped = [
+      ...new Set([
+        ...costByCycle.keys(),
+        ...uncostedByCycle.keys(),
+        ...tokensByCycle.keys(),
+        ...activeByCycle.keys(),
+      ]),
+    ].filter((key) => !known.has(key));
+
+    if (series.truncated === 0 && dropped.length > 0) {
+      // ⚠️ The message carries no internal identifier: an `E_INTERNAL` message can reach the
+      // screen, and §1a bans identifiers there even in a failure.
+      throw new Error(
+        `Some records fell into a billing cycle that is not in the list of cycles ` +
+          `(${dropped.join(', ')}).`,
+      );
+    }
+
+    let excludedPico = 0n;
+    const excluded: ExcludedCycleTotals = {
+      cycles: series.truncated,
+      records: 0,
+      costNanoUsd: null,
+      uncostedRecords: 0,
+      outputTokens: 0,
+      inputTokens: 0,
+      cacheReadTokens: 0,
+      activeSeconds: 0,
+    };
+    let excludedCostedEvents = 0;
+    for (const key of dropped) {
+      const cost = costByCycle.get(key);
+      const tokens = tokensByCycle.get(key);
+      const uncostedRecords = uncostedByCycle.get(key) ?? 0;
+      excludedPico += cost?.costPicoUsd ?? 0n;
+      excludedCostedEvents += cost?.costedEvents ?? 0;
+      // The record count is the classified population the `$` is computed over: what was priced
+      // plus what could not be. So `Σ listed + excluded` accounts for every record `uncosted`
+      // discloses, exactly.
+      excluded.records += (cost?.costedEvents ?? 0) + uncostedRecords;
+      excluded.uncostedRecords += uncostedRecords;
+      excluded.outputTokens += tokens?.output ?? 0;
+      excluded.inputTokens += tokens?.input ?? 0;
+      excluded.cacheReadTokens += tokens?.cacheRead ?? 0;
+      excluded.activeSeconds += activeByCycle.get(key) ?? 0;
+    }
+    // ⚠️ Converted ONCE, from the summed picoUSD, exactly as a listed row is (§3.11, ADR-023) —
+    // and `null` on the same all-or-nothing rule, so a dropped cycle nothing could be priced in
+    // reports no `$` rather than `$0.00` (INV-09).
+    excluded.costNanoUsd = costToWire(excludedPico, excludedCostedEvents);
+
+    return {
+      anchorDay,
+      cycles,
+      truncated: series.truncated,
+      excluded,
+      uncosted: this.#uncostedSummary(context.filter),
+    };
   }
 
   /** `q:originSplit` (§6.4, §6.6) — M-17, with the unlinked-run disclosure (§3.7). */

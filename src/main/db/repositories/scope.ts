@@ -11,6 +11,7 @@
 // The fixtures pin `TZ` explicitly, which ADR-021 requires for reproducibility.
 
 import { DbError } from '../errors';
+import { MAX_BILLING_CYCLE_DAY, MIN_BILLING_CYCLE_DAY } from '../../../shared/billing-cycle';
 import type { SqlParam } from '../sqlite';
 import type { GlobalFilter, Page, Paged } from '../../../shared/ipc-contract';
 
@@ -85,6 +86,74 @@ export function scopeClause(filter: GlobalFilter, alias: string, tsColumn = 'ts'
 /** `YYYY-MM-DD` in the machine's local timezone — M-08's day, M-16's bucket, the calendar's cell. */
 export function localDate(tsExpression: string): string {
   return `date(${tsExpression}/1000, 'unixepoch', 'localtime')`;
+}
+
+/**
+ * A-19 — **the billing cycle a local day belongs to**, as `YYYY-MM`: the year-month of the day
+ * shifted back by `anchorDay - 1` days. The one `?` is `anchorDay - 1`.
+ *
+ * ⚠️ It takes an already-LOCAL date (`localDate(...)`, or the `local_day` column a CTE computed
+ * with it), not a timestamp, and that is deliberate on two counts. The zone is applied exactly
+ * once, by the expression ADR-021 names, so a cycle bucket and a day bucket can never be taken in
+ * different zones; and the shift is then plain calendar arithmetic on a `YYYY-MM-DD` string,
+ * which SQLite does by the calendar and not by 86 400 000 ms — a cycle spanning a daylight-saving
+ * change is 30 days and one hour long, and a day-count that assumed 24-hour days would move its
+ * boundary by a day (§3.1.1, ADR-021, CLAUDE.md §1).
+ *
+ * ⚠️ **Exact for every legal anchor day, because the legal range is 1…28.** Every month has a 1st
+ * through a 28th, so the shifted date never falls out of a month that exists and the boundary
+ * never has to be clamped. This is the same fact `MAX_BILLING_CYCLE_DAY` is 28 for.
+ *
+ * ⚠️ The `CAST(? AS INTEGER)` is load-bearing for the same reason as `CAPPED_GAP_MS` in
+ * `active-time.ts`: `better-sqlite3` binds every JS number as a SQLite REAL, and concatenating a
+ * REAL yields the modifier `'-14.0 days'` instead of `'-14 days'`. SQLite happens to accept both,
+ * but a modifier string whose meaning depends on how one driver binds a number is not something
+ * a calendar boundary should rest on.
+ *
+ * The key it produces is the year-month of the cycle's OWN start, which is what
+ * `billingCycleKey()` in `src/shared/billing-cycle.ts` computes from the window — the two sides
+ * of one identity, pinned by a golden test rather than trusted.
+ */
+export function billingCycleKeySql(localDayExpression: string): string {
+  return `strftime('%Y-%m', date(${localDayExpression}, '-' || CAST(? AS INTEGER) || ' days'))`;
+}
+
+/**
+ * A-19 — **the one gate on the anchor day inside the main process**, and the one error it raises.
+ *
+ * ⚠️ The range is re-checked here rather than trusted from the settings layer. This is the value
+ * that decides which month a dollar lands in; a `0` or a `31` arriving from a caller that skipped
+ * validation would move every boundary and fail nothing (§3.13, CLAUDE.md §1 — never substitute,
+ * never clamp). The bounds are the shared constants the window arithmetic uses, so the SQL side
+ * and the calendar side cannot disagree about what is legal.
+ *
+ * ⚠️ It is separate from `billingCycleShift` so that a query path which needs the day CHECKED
+ * before it needs the shift — `AnalyticsRepository.billingCycleTotals` builds its calendar before
+ * it touches a repository — raises this `E_INVALID_SETTING` too. The alternative was the shape
+ * this had first: the calendar throwing a bare `RangeError` from `src/shared/`, which §4.1 flattens
+ * to `E_INTERNAL`, so ONE illegal day produced two different error codes depending on which line
+ * happened to run first, and the carefully written code below was dead on the live path.
+ */
+export function assertBillingCycleDay(anchorDay: number): void {
+  if (
+    !Number.isInteger(anchorDay) ||
+    anchorDay < MIN_BILLING_CYCLE_DAY ||
+    anchorDay > MAX_BILLING_CYCLE_DAY
+  ) {
+    throw new DbError(
+      'E_INVALID_SETTING',
+      `Grouping by billing cycle needs the day of the month the bill lands, a whole number ` +
+        `from ${String(MIN_BILLING_CYCLE_DAY)} to ${String(MAX_BILLING_CYCLE_DAY)}; ` +
+        `received ${String(anchorDay)}.`,
+      { retryable: false },
+    );
+  }
+}
+
+/** A-19 — the single bind parameter `billingCycleKeySql` takes: `anchorDay - 1`, once checked. */
+export function billingCycleShift(anchorDay: number): number {
+  assertBillingCycleDay(anchorDay);
+  return anchorDay - 1;
 }
 
 /**

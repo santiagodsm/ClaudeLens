@@ -52,7 +52,14 @@
 
 import { Repository, sumToSafeNumber } from './base';
 import { PROJECT_UNIT_CTE } from './project-groups';
-import { idleGapMs, localDate, scopeClause, type QueryContext } from './scope';
+import {
+  billingCycleKeySql,
+  billingCycleShift,
+  idleGapMs,
+  localDate,
+  scopeClause,
+  type QueryContext,
+} from './scope';
 import type { SqlParam, SqliteDatabase } from '../sqlite';
 
 /** M-08 / §4.5 `WorkingDayRow`, before display names are joined on. */
@@ -227,6 +234,39 @@ SELECT local_day                          AS day,
        COUNT(DISTINCT session_id)         AS sessions
 FROM   gapped
 GROUP BY local_day, project_id`;
+}
+
+/**
+ * A-19 — M-07 binding **(C)**, per billing cycle: the sum of (B) over the working-day groups that
+ * fall inside each cycle. One `?` for the cycle shift, then the `idleGapMs` the gap cap binds.
+ *
+ * ⚠️ **This is not a second active-time formula, and the reason is a calendar fact.** A cycle
+ * boundary is a LOCAL MIDNIGHT (`src/shared/billing-cycle.ts` builds it with the local-time
+ * `Date(y, m, d)` constructor), and binding (B)'s partition is `(local day, project unit)`. A
+ * local midnight therefore never falls inside a working-day group — it only ever falls between
+ * two of them. So every group belongs, whole, to exactly one cycle, and "the sum of (B) over the
+ * groups in this cycle" IS binding (C) evaluated over that cycle's window: restricting the event
+ * stream to the cycle first would drop no gap and change no partition's first event, because the
+ * first event of the cycle is also the first event of its own working day. The golden fixture
+ * asserts precisely that — each cycle's number here equals `bindingCSeconds()` over a filter
+ * restricted to that cycle — rather than leaving the argument to this comment.
+ *
+ * ⚠️ `SUM(active_ms / 1000)` per GROUP, then summed per cycle: the per-group seconds are the
+ * summands INV-21 names, so a cycle's total and the working-day rows it is made of cannot differ
+ * by a rounding residue, exactly as `overlapSql` is careful about.
+ */
+function workingDayByCycleSql(scoped: string): string {
+  return `WITH ${scoped},
+${gappedCte(WORKING_DAY_PARTITION)},
+per_group AS (
+  SELECT local_day, project_id, COALESCE(SUM(${CAPPED_GAP_MS}), 0) AS active_ms
+  FROM   gapped
+  GROUP BY local_day, project_id
+)
+SELECT ${billingCycleKeySql('local_day')} AS key,
+       COALESCE(SUM(active_ms / 1000), 0) AS active_seconds
+FROM   per_group
+GROUP BY key`;
 }
 
 /**
@@ -409,6 +449,32 @@ export class ActiveTimeRepository extends Repository {
         ...this.#workingDayForFolders(context, regrouped),
       ],
     };
+  }
+
+  /**
+   * A-19 — M-07 binding **(C)**, one row per billing cycle (§4.5 `q:billingCycleTotals`).
+   *
+   * ⚠️ The same binding every multi-session Active-hours figure in the app reports, restricted to
+   * a cycle by the calendar argument on `workingDayByCycleSql`. Cycles with no working-day group
+   * produce no row; the caller reads a missing key as `0`, which is measured — no events, no
+   * gaps, no active time — rather than unknown.
+   */
+  bindingCSecondsByBillingCycle(context: QueryContext, anchorDay: number): Map<string, number> {
+    const scoped = scopedCte(context.filter);
+    const rows = this.all<{
+      readonly key: string;
+      readonly active_seconds: number | bigint | null;
+    }>(
+      workingDayByCycleSql(scoped.sql),
+      // ⚠️ Bind order follows the SQL TEXT, not the reading order: `per_group`'s capped gap sits
+      // in the WITH clause and is therefore bound before the cycle key in the final SELECT.
+      ...scoped.params,
+      idleGapMs(context),
+      billingCycleShift(anchorDay),
+    );
+    return new Map(
+      rows.map((row) => [row.key, sumToSafeNumber(row.active_seconds, 'activeSeconds')]),
+    );
   }
 
   /**

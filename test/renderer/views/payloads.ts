@@ -12,6 +12,8 @@
 
 import type {
   ActivityCalendar,
+  BillingCycleRow,
+  BillingCycleTotals,
   CacheEfficiency,
   ContextOverhead,
   CostBreakdown,
@@ -36,6 +38,9 @@ import type {
   UncostedSummary,
   WorkingDayRow,
 } from '../../../src/shared/ipc-contract';
+
+import type { BillingCycleWindow } from '../../../src/shared/billing-cycle';
+import { cyclesBetween } from '../../../src/shared/billing-cycle';
 
 /** A fixed instant, so a formatted date is a property of the value and not of the clock. */
 export const T0 = Date.UTC(2026, 2, 2, 9, 0, 0);
@@ -73,6 +78,80 @@ export function overviewTiles(overrides: Partial<OverviewTiles> = {}): OverviewT
     distinctTools: 11,
     uncosted: NO_UNCOSTED,
     overlapSeconds: 0,
+    ...overrides,
+  };
+}
+
+/**
+ * A-19 — the anchor day and the two instants the default cycle payload is built from. Fixed, so
+ * a rendered cycle label is a property of the value and not of the clock.
+ */
+export const CYCLE_ANCHOR_DAY = 15;
+export const CYCLE_NOW = Date.UTC(2026, 7, 20, 12);
+/** The first record in the dataset the default cycle payload describes. */
+export const CYCLE_FIRST = Date.UTC(2026, 4, 20, 12);
+
+/**
+ * One cycle's totals over a REAL window — the boundaries come from the shared arithmetic, so a
+ * payload can never describe a window the app could not have produced (A-19).
+ */
+export function billingCycleRow(
+  window: BillingCycleWindow,
+  overrides: Partial<BillingCycleRow> = {},
+): BillingCycleRow {
+  return {
+    from: window.from,
+    to: window.to,
+    costNanoUsd: 10_000_000_000, // $10.00
+    uncostedRecords: 0,
+    outputTokens: 500_000,
+    cacheReadTokens: 4_000_000,
+    inputTokens: 20_000,
+    sessions: 12,
+    activeSeconds: 36_000,
+    inProgress: false,
+    elapsedDays: 31,
+    totalDays: 31,
+    ...overrides,
+  };
+}
+
+/**
+ * Four consecutive cycles, newest first, the newest of them still running — the shape the two
+ * comparison surfaces are built for, including the partial one they must refuse to compare.
+ */
+export function billingCycleTotals(
+  overrides: Partial<BillingCycleTotals> = {},
+): BillingCycleTotals {
+  const { cycles } = cyclesBetween(CYCLE_ANCHOR_DAY, CYCLE_FIRST, CYCLE_NOW);
+  return {
+    anchorDay: CYCLE_ANCHOR_DAY,
+    cycles: cycles.map((window, index) =>
+      index === 0
+        ? // The cycle the clock is inside: six days of it have happened, so its `$` covers six
+          // days and is not comparable with the whole ones behind it.
+          billingCycleRow(window, {
+            costNanoUsd: 2_000_000_000, // $2.00
+            inProgress: true,
+            elapsedDays: 6,
+            totalDays: 31,
+          })
+        : billingCycleRow(window, { costNanoUsd: (index + 1) * 10_000_000_000 }),
+    ),
+    truncated: 0,
+    // A-19 — nothing was left out of this list, so there is nothing for the excluded totals to
+    // hold. A payload that truncated would carry the dropped cycles' records and cost here.
+    excluded: {
+      cycles: 0,
+      records: 0,
+      costNanoUsd: null,
+      uncostedRecords: 0,
+      outputTokens: 0,
+      inputTokens: 0,
+      cacheReadTokens: 0,
+      activeSeconds: 0,
+    },
+    uncosted: NO_UNCOSTED,
     ...overrides,
   };
 }

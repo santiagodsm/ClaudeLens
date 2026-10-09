@@ -14,7 +14,7 @@
  */
 
 import { afterEach, describe, expect, it } from 'vitest';
-import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import { OverviewView } from '../../../src/renderer/views/OverviewView';
 import { TokensView } from '../../../src/renderer/views/TokensView';
@@ -25,7 +25,10 @@ import { GraphsView } from '../../../src/renderer/views/GraphsView';
 import { HarnessView } from '../../../src/renderer/views/HarnessView';
 import { SettingsView } from '../../../src/renderer/views/SettingsView';
 import { GRAPH_TABS } from '../../../src/renderer/views/graphs/tabs';
-import { DEFAULT_SETTINGS } from '../harness';
+import { TopBar } from '../../../src/renderer/shell/TopBar';
+import { useAppStore } from '../../../src/renderer/store/app-store';
+import { DEFAULT_SETTINGS, installBridge, renderRouted } from '../harness';
+import { bootStore } from './view-harness';
 import type { ChannelStubs } from './view-harness';
 import { ok, renderView, resetAll, uninstallBridge } from './view-harness';
 import {
@@ -36,6 +39,7 @@ import {
   fileMetrics,
   modelTimeline,
   observedModels,
+  billingCycleTotals,
   originSplit,
   overviewTiles,
   priceRows,
@@ -104,6 +108,7 @@ const FULL_STUBS = {
   'q:tokensByProject': () => ok(tokensByProject()),
   'q:costBreakdown': () => ok(costBreakdown()),
   'q:originSplit': () => ok(originSplit()),
+  'q:billingCycleTotals': () => ok(billingCycleTotals()),
   // Sessions
   'q:sessionHistogram': () => ok(sessionHistogram()),
   'q:rhythmHeatmap': () => ok(rhythmHeatmap()),
@@ -202,5 +207,42 @@ describe('§1a — no jargon reaches the screen, across every view', () => {
       });
       expectNoJargon(`graphs:${tab.id}`, view.container.textContent ?? '');
     }
+  });
+});
+
+/**
+ * §1a — **the sweep above renders views, and the chrome they hang inside is not a view.**
+ *
+ * The control at the top of the app is where A-19 put the whole time filter: its option list, its
+ * "some other dates" row and its truncation note are all copy, all user-visible, and all outside
+ * `view-*-primary`. A sweep that stops at the views leaves the most-read strings in the app
+ * unswept (A-19 review).
+ */
+describe('§1a — no jargon in the chrome the views hang inside', () => {
+  /** A fixed instant, so the labels are a property of the value and not of the clock. */
+  const NOW = Date.UTC(2026, 7, 20, 12);
+
+  it('renders no internal identifier in the top bar, its cycle list or its notes', () => {
+    installBridge(FULL_STUBS);
+    // Ten years of data, so the list is long enough for the cap to bite and the truncation note
+    // to render beside it.
+    bootStore({ coverage: { transcriptsFrom: Date.UTC(2010, 0, 1) } });
+    const view = renderRouted(<TopBar title="Overview" disabled={false} now={NOW} />);
+
+    // The picker is a `<select>`: its options are in the tree, so their labels are swept too.
+    expect(screen.getByTestId('cycle-filter').querySelectorAll('option').length).toBeGreaterThan(1);
+    expect(screen.getByTestId('cycle-filter-truncated')).toBeInTheDocument();
+    expectNoJargon('top bar', view.container.textContent ?? '');
+
+    // …and the row that appears only while the app's window came from somewhere other than this
+    // control, which is the one label the sweep could never reach in the default state.
+    act(() => {
+      useAppStore.setState({
+        filter: { projectIds: null, from: Date.UTC(2026, 0, 1), to: Date.UTC(2026, 0, 8) },
+        rangeChoice: null,
+      });
+    });
+    expect(screen.getByTestId('cycle-filter')).toHaveValue('other');
+    expectNoJargon('top bar (some other dates)', view.container.textContent ?? '');
   });
 });

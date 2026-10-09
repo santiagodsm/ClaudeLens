@@ -69,6 +69,7 @@ export function bootStore(options: BootOptions = {}): void {
     schemaVersion: 1,
     sync: IDLE_SYNC,
     filter: ALL_TIME_ALL_PROJECTS,
+    rangeChoice: null,
     settings: { ...DEFAULT_SETTINGS, claudeDir: '/sandbox/claude', ...options.settings },
     coverage: { ...ZERO_COVERAGE, ...options.coverage },
     reduceMotion: 'reduce',

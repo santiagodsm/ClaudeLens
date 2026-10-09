@@ -209,6 +209,23 @@ export function formatBytes(bytes: number): string {
 }
 
 /**
+ * A local calendar date: the M-06 range, the M-16 boundary and A-18's billing-cycle caption.
+ *
+ * ADR-021 — timestamps are UTC epoch ms and every calendar rendering is in **local** time.
+ * ⚠️ Moved here from `views/shared/disclosures.tsx` (A-18) so the one date rendering serves both
+ * the disclosure lines and `lib/billing-cycle.ts`, which cannot import a `.tsx` view module.
+ * `disclosures.tsx` re-exports it, so its existing callers are unchanged.
+ */
+export function formatDay(epochMs: number): string {
+  assertFinite(epochMs, 'formatDay');
+  return new Date(epochMs).toLocaleDateString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: '2-digit',
+  });
+}
+
+/**
  * ADR-021 — timestamps are UTC epoch ms and every calendar rendering is in **local** time.
  * `null` renders as "never", never as the epoch and never as "now".
  */

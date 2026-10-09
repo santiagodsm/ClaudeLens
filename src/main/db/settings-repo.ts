@@ -11,11 +11,16 @@
 
 import type {
   GlobalFilter,
+  RangeChoice,
   ReduceMotionPreference,
   SettingKey,
   SettingsSnapshot,
   ThemePreference,
 } from '../../shared/ipc-contract';
+// A-19 — the legal values of `lastRangeChoice` and its default are defined once, in `src/shared/`,
+// because the renderer resolves the same value this file validates (CLAUDE.md §1).
+import { DEFAULT_BILLING_CYCLE_DAY } from '../../shared/billing-cycle';
+import { DEFAULT_RANGE_CHOICE, parseRangeChoice } from '../../shared/range-choice';
 import { DbError } from './errors';
 import { Repository, type PersistenceClass } from './repositories/base';
 import type { SqliteDatabase } from './sqlite';
@@ -35,7 +40,14 @@ export const SETTINGS_PERSISTENCE_CLASS: PersistenceClass = 'USER';
 // each key's DEFAULT and its runtime VALIDATOR.
 // ---------------------------------------------------------------------------------------
 
-export type { GlobalFilter, ReduceMotionPreference, SettingKey, SettingsSnapshot, ThemePreference };
+export type {
+  GlobalFilter,
+  RangeChoice,
+  ReduceMotionPreference,
+  SettingKey,
+  SettingsSnapshot,
+  ThemePreference,
+};
 
 /**
  * Reported when a PERSISTED value could not be used and its documented default was
@@ -98,10 +110,31 @@ const asEfficiencyDropThreshold = (value: unknown): number | undefined => {
   return value;
 };
 
+/**
+ * A-18 — the day of the month the user's Claude bill lands, and therefore the day the Overview's
+ * totals start counting from. An integer in [1, 28]. Like `idleGapMinutes` it is REJECTED, never
+ * clamped and never rounded, when out of range (CLAUDE.md §1: never substitute).
+ *
+ * ⚠️ **The upper bound is 28 on purpose, and it is not a cosmetic limit.** Every month has a 1st
+ * through a 28th, so a cycle boundary built from a day in that range always exists in every month
+ * and never has to be clamped to "the last day of the month". A 31st would mean a boundary that
+ * silently moves — February's cycle would start on a different day of the month from January's —
+ * and a total whose window moved without the user asking is the silently-wrong number this
+ * application exists to refuse.
+ */
+const asBillingCycleDay = (value: unknown): number | undefined => {
+  if (typeof value !== 'number' || !Number.isInteger(value)) return undefined;
+  if (value < 1 || value > 28) return undefined;
+  return value;
+};
+
 const asNullableEpochMs = (value: unknown): number | null | undefined => {
   if (value === null) return null;
   return typeof value === 'number' && Number.isSafeInteger(value) ? value : undefined;
 };
+
+/** A-19 — §3.13's validator for `lastRangeChoice`, delegated so there is exactly one of them. */
+const asRangeChoice = (value: unknown): RangeChoice | undefined => parseRangeChoice(value);
 
 const asGlobalFilter = (value: unknown): GlobalFilter | undefined => {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
@@ -162,6 +195,19 @@ export const SETTING_DEFINITIONS: {
   // no DB migration, exactly as ADR-041's `retainOrphanedHistory` was: `settings` is a key/value
   // table (§3.13), so a new key needs a definition, not a schema change.
   efficiencyDropThreshold: { defaultValue: 0.4, parse: asEfficiencyDropThreshold },
+  // A-18 — the day of the month the Claude bill lands. Default 15, the day the user receives
+  // theirs. The Overview's four totals count from this day of each month unless the user asks for
+  // everything instead. Added with no DB migration, exactly as `retainOrphanedHistory` (ADR-041)
+  // and `efficiencyDropThreshold` (A-12) were: `settings` is a key/value table (§3.13), so a new
+  // key needs a definition, not a schema change.
+  billingCycleDay: { defaultValue: DEFAULT_BILLING_CYCLE_DAY, parse: asBillingCycleDay },
+  // A-19 — which option the app's top control is on, stored as the CHOICE rather than as the two
+  // dates it resolves to. ⚠️ `lastGlobalFilter` above holds absolute epoch ms, so persisting "this
+  // billing cycle" there would reopen the app on the cycle that has since closed while the control
+  // still called it the current one (CLAUDE.md §1). The validator is `src/shared/range-choice.ts`'s,
+  // so the process that stores the value and the process that resolves it cannot disagree about
+  // what is legal. Rejected, never coerced, exactly like every other key here.
+  lastRangeChoice: { defaultValue: DEFAULT_RANGE_CHOICE, parse: asRangeChoice },
 };
 
 export const SETTING_KEYS: readonly SettingKey[] = Object.keys(SETTING_DEFINITIONS) as SettingKey[];

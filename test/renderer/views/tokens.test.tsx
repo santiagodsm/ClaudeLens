@@ -17,6 +17,7 @@ import {
   costBreakdown,
   fileMetrics,
   modelTimeline,
+  billingCycleTotals,
   originSplit,
   projectCards,
   T0,
@@ -38,6 +39,8 @@ function stubs(overrides: Partial<Record<string, () => unknown>> = {}) {
     'q:tokensByProject': () => ok(tokensByProject()),
     'q:costBreakdown': () => ok(costBreakdown()),
     'q:originSplit': () => ok(originSplit()),
+    // A-19 — the per-cycle comparison card.
+    'q:billingCycleTotals': () => ok(billingCycleTotals()),
     ...overrides,
   } as Parameters<typeof renderView>[1];
 }
@@ -99,7 +102,11 @@ describe('§6.4 Tokens & Cost — the Cost panel’s three conditions', () => {
     renderView(<TokensView />, stubs());
     // 10.00 + 2.34
     expect(await screen.findByTestId('cost-total')).toHaveTextContent('$12.34');
-    expect(screen.getByTestId('all-costed-disclosure')).toBeInTheDocument();
+    // Two `$` figures on this view carry a disclosure now — the Cost panel's and the per-cycle
+    // card's (A-19, INV-10: every dollar figure carries its own).
+    expect(
+      within(screen.getByTestId('tokens-cost-panel')).getByTestId('all-costed-disclosure'),
+    ).toBeInTheDocument();
   });
 
   it('shows the figure WITH the disclosure and a Settings → Pricing link when records > 0', async () => {

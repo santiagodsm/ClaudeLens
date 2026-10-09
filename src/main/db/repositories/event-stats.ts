@@ -12,6 +12,8 @@
 import { API_CALL_ROWS_CTE } from './api-call-usage';
 import { Repository, sumToSafeNumber } from './base';
 import {
+  billingCycleKeySql,
+  billingCycleShift,
   localDate,
   localHour,
   localWeekStart,
@@ -120,6 +122,28 @@ export interface CoverageBounds {
   readonly promptsFrom: number | null;
   readonly promptsTo: number | null;
   readonly statsCacheDays: number;
+}
+
+/**
+ * A-19 — one billing cycle's token sums and session count, keyed on the cycle's `YYYY-MM`.
+ *
+ * ⚠️ The token sums are M-02/M-03/M-04 over the M-01 population — the SAME sums
+ * `tokenTotals()` reports — and `sessions` is the same `COUNT(DISTINCT session_id)` over raw
+ * `events` that `counts()` reports. That is the whole reason this lives here instead of being
+ * read off the costing query: the per-cycle row and the Overview tile for the same window must
+ * be the same number, and they are only guaranteed to be if they come from the same population
+ * (CLAUDE.md §1). A session that spans a cycle boundary is counted in both cycles, exactly as a
+ * session spanning local midnight is counted in both working days (M-08).
+ */
+export interface BillingCycleTokenRow extends TokenTotals {
+  readonly key: string;
+  readonly sessions: number;
+}
+
+/** M-16, restricted to a scope — the first and last instant any event in it was recorded at. */
+export interface ScopeBounds {
+  readonly firstTs: number | null;
+  readonly lastTs: number | null;
 }
 
 /** One `(bucket, series)` cell of a §4.5 `ModelTimeline`. */
@@ -388,6 +412,87 @@ export class EventStatsRepository extends Repository {
       model: row.model,
       value: sumToSafeNumber(row.value, 'timeline.value'),
     }));
+  }
+
+  /**
+   * A-19 — M-02/M-03/M-04 and the session count, **grouped by billing cycle** (§4.5
+   * `q:billingCycleTotals`).
+   *
+   * ⚠️ Two statements, because the two populations genuinely differ and `counts()` already says
+   * why: the token sums are over `api_call_rows` with M-01's `is_synthetic = 0` (an API call is
+   * summed once, ADR-042), while a session that contains only synthetic events still happened and
+   * is counted. Folding them into one query would have to pick one population for both, and
+   * whichever it picked would make one of the two numbers disagree with its Overview tile.
+   *
+   * ⚠️ Cycles with no events produce no row. The caller lists the cycles — it knows the calendar,
+   * the query only knows the data — and reads a missing key as a measured zero for tokens and
+   * sessions, and as "nothing could be costed" for the money beside it.
+   */
+  byBillingCycle(context: QueryContext, anchorDay: number): BillingCycleTokenRow[] {
+    const shift = billingCycleShift(anchorDay);
+    const tokenScope = scopeClause(context.filter, 'e');
+    const tokens = this.all<TokenRecord & { readonly key: string }>(
+      `WITH ${API_CALL_ROWS_CTE}
+       SELECT ${billingCycleKeySql(localDate('e.ts'))} AS key, ${TOKEN_COLUMNS}
+       FROM   api_call_rows e
+       WHERE  ${COUNTABLE}${tokenScope.sql}
+       GROUP BY key`,
+      shift,
+      ...tokenScope.params,
+    );
+
+    const sessionScope = scopeClause(context.filter, 'e');
+    const sessions = this.all<{ readonly key: string; readonly sessions: number }>(
+      `SELECT ${billingCycleKeySql(localDate('e.ts'))} AS key,
+              COUNT(DISTINCT e.session_id)             AS sessions
+       FROM   events e
+       WHERE  1 = 1${sessionScope.sql}
+       GROUP BY key`,
+      shift,
+      ...sessionScope.params,
+    );
+
+    const sessionsByKey = new Map(sessions.map((row) => [row.key, row.sessions]));
+    const rows = new Map<string, BillingCycleTokenRow>();
+    for (const row of tokens) {
+      rows.set(row.key, {
+        key: row.key,
+        ...readTokens(row),
+        sessions: sessionsByKey.get(row.key) ?? 0,
+      });
+    }
+    // A cycle holding only synthetic events has sessions but no tokens, and must not vanish.
+    for (const [key, count] of sessionsByKey) {
+      if (rows.has(key)) continue;
+      rows.set(key, {
+        key,
+        input: 0,
+        output: 0,
+        cacheWrite: 0,
+        cacheWrite1h: 0,
+        cacheRead: 0,
+        sessions: count,
+      });
+    }
+    return [...rows.values()];
+  }
+
+  /**
+   * The first and last instant recorded in a scope — what A-19 builds its list of cycles from.
+   *
+   * ⚠️ No M-01 predicate: a cycle in which the only records were synthetic still happened, and a
+   * list of cycles that skipped it would present two non-adjacent cycles as consecutive.
+   * ⚠️ `null` when the scope holds nothing, never `0` and never the clock.
+   */
+  bounds(context: QueryContext): ScopeBounds {
+    const scope = scopeClause(context.filter, 'e');
+    const row = this.one<{ readonly first_ts: number | null; readonly last_ts: number | null }>(
+      `SELECT MIN(e.ts) AS first_ts, MAX(e.ts) AS last_ts
+       FROM   events e
+       WHERE  1 = 1${scope.sql}`,
+      ...scope.params,
+    );
+    return { firstTs: row?.first_ts ?? null, lastTs: row?.last_ts ?? null };
   }
 
   /** M-16 — data coverage. `partialBefore` is derived from these four bounds by the caller. */

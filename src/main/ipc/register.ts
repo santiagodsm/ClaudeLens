@@ -118,6 +118,15 @@ export function createHandlers(deps: HandlerDeps): IpcHandlerMap {
     'q:contextOverhead': (req) => ok(dataset.analytics.contextOverhead(dataset.queryContext(req))),
     'q:costBreakdown': (req) =>
       ok(dataset.analytics.costBreakdown(dataset.queryContext(req), req.by)),
+    /**
+     * A-19 — every billing cycle's totals, for comparing one cycle against the next (§6.3, §6.4).
+     *
+     * ⚠️ Not `dataset.queryContext(req)`, because this request is not a `GlobalFilter`: it has no
+     * date range to convert. `DatasetService.billingCycleTotals` builds the project-only context
+     * and supplies the injected clock, so nothing in the query path reads a wall clock it was not
+     * handed (ADR-021).
+     */
+    'q:billingCycleTotals': (req) => ok(dataset.billingCycleTotals(req)),
     'q:sessionHistogram': (req) =>
       ok(dataset.analytics.sessionHistogram(dataset.queryContext(req))),
     'q:rhythmHeatmap': (req) => ok(dataset.analytics.rhythmHeatmap(dataset.queryContext(req))),

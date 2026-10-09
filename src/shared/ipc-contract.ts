@@ -11,6 +11,13 @@
 //
 // This module is types-only apart from nothing at all — it emits no runtime values by design.
 
+// A-19 — `RangeChoice` is defined in `src/shared/range-choice.ts`, beside the validator and the
+// resolution rule that give it meaning, and is re-exported here (type-only, so this file still
+// emits nothing) so the settings snapshot below can name it without a second definition.
+import type { RangeChoice } from './range-choice';
+
+export type { RangeChoice };
+
 // ---------------------------------------------------------------------------
 // §4.1 — The error contract, defined once, used everywhere
 // ---------------------------------------------------------------------------
@@ -180,6 +187,29 @@ export interface SettingsSnapshot {
    * across launches. No DB migration — `settings` is a key/value table (§3.13), as ADR-041 was.
    */
   efficiencyDropThreshold: number; // default 0.40 (A-12)
+  /**
+   * ⚠️ A-18 (PROGRESS.md, 2026-08-18) — the day of the month the user's Claude bill lands, which
+   * is the day the Overview's four totals start counting from. Default 15 (the user's own billing
+   * day). Range **1–28 inclusive, integers only**, REJECTED not clamped out of range (mirrors
+   * `idleGapMinutes`, §1). ⚠️ The 28 is deliberate: every month has a 1st through a 28th, so a
+   * cycle boundary never has to be clamped to a month's last day and can never silently move.
+   * Purely presentational: the window is built in the renderer in local calendar time (ADR-021)
+   * and passed as an ordinary `GlobalFilter` range; no metric and no stored value reads it.
+   * No DB migration — `settings` is a key/value table (§3.13), as ADR-041 and A-12 were.
+   */
+  billingCycleDay: number; // default 15 (A-18)
+  /**
+   * ⚠️ A-19 (PROGRESS.md, 2026-08-18) — **which option the control at the top of the app is on,
+   * stored as the CHOICE and not as the dates it resolved to.** `lastGlobalFilter` above persists
+   * absolute epoch ms, so storing "this billing cycle" there would pin the next launch to the
+   * cycle that has since closed — a window nobody chose, under a label saying it is the current
+   * one (CLAUDE.md §1). The legal values and the resolution rule live in
+   * `src/shared/range-choice.ts`; default `'cycle:current'`, REJECTED not clamped when invalid,
+   * and a stored cycle that no longer resolves falls back to the default. `lastGlobalFilter`
+   * keeps owning the project selection, which has no clock in it. No DB migration — `settings` is
+   * a key/value table (§3.13), as ADR-041, A-12 and A-18 were.
+   */
+  lastRangeChoice: RangeChoice; // default 'cycle:current' (A-19)
 }
 
 /** §3.13 */
@@ -661,6 +691,161 @@ export interface CostBreakdown {
    */
   rows: { key: string; label: string; costNanoUsd: number; tokensByClass: TokenBreakdown }[];
   uncosted: UncostedSummary; // INV-10
+}
+
+/**
+ * §4.5 `q:billingCycleTotals` request (A-19, 2026-08-18).
+ *
+ * ⚠️⚠️ **This request deliberately cannot carry a date range, and that is a type decision, not an
+ * omission.** The card's whole job is to compare every billing cycle against every other while
+ * the control at the top of the app is parked on ONE of them — so a `from`/`to` would have to be
+ * ignored, and a request that accepts a field it silently drops is a lie the compiler could have
+ * caught. `projectIds` IS honoured: the projects chosen at the top narrow these totals exactly as
+ * they narrow every other figure. The surfaces say both of those things in plain words (§1a).
+ *
+ * ⚠️⚠️ **It carries no `anchorDay` either, and for the same class of reason.** The day of the
+ * month the bill lands is a stored setting (`billingCycleDay`, §3.13); a request that carried it
+ * would let a caller holding a stale settings snapshot ask for cycles on the OLD boundaries while
+ * the control at the top of the app resolved the new ones — the same month, two totals, nothing
+ * failing. The main process reads the day from the settings snapshot instead (exactly as it reads
+ * `idleGapMinutes` rather than accepting it), and echoes the day it resolved back in the payload
+ * so a surface can caption what it actually got. The skew is unrepresentable rather than guarded
+ * against (CLAUDE.md §1).
+ */
+export interface BillingCycleTotalsRequest {
+  /** Project UNIT ids (ADR-040), expanded at the IPC edge like every other filter. */
+  projectIds: number[] | null;
+}
+
+/**
+ * §4.5 `q:billingCycleTotals` — one row per billing cycle in the data (A-19).
+ *
+ * ⚠️ Every cycle from the first one containing a record through the one containing now is
+ * present, **including cycles in which nothing happened**. A missing row would make two
+ * non-adjacent cycles look consecutive on a chart whose whole point is "when did I use more" —
+ * a gap silently closed up. A zero cycle is told apart from an unpriced one by its own fields:
+ * no tokens and no sessions is nothing happened; tokens with `costNanoUsd: null` is
+ * "these records have no price" (INV-09), and `uncostedRecords` says how many.
+ */
+export interface BillingCycleTotals {
+  /**
+   * The day of the month these boundaries were built from — read from `billingCycleDay` in the
+   * main process, never from the request, and echoed here so a caption can name the day the
+   * numbers beside it were actually bucketed on.
+   */
+  anchorDay: number;
+  /** Newest first. `cycles[i].from === cycles[i + 1].to` — consecutive, with no gap. */
+  cycles: BillingCycleRow[];
+  /**
+   * How many cycles older than the cap were left out — `0` normally. ⚠️ Reported rather than
+   * silently applied (§4.6: incompleteness is data in the success payload). `excluded` below says
+   * what is inside them.
+   */
+  truncated: number;
+  /**
+   * §4.6 — **what the rows above do not contain.** Zeros and `null` whenever `truncated === 0`.
+   *
+   * ⚠️ It exists because `uncosted` covers the WHOLE scope while `cycles` covers only the listed
+   * windows, so once the cap bites, `Σ cycles[].uncostedRecords` is less than `uncosted.records`
+   * and `Σ cycles[].costNanoUsd` is less than the all-time total — two figures on one screen that
+   * do not add up, with only a cycle count to explain them. With this, the discrepancy is
+   * quantified in the payload: listed + excluded accounts for every record and every priced
+   * token, so a surface can state the shortfall instead of leaving the reader to find it
+   * (CLAUDE.md §1, §4.6).
+   */
+  excluded: ExcludedCycleTotals;
+  /**
+   * INV-10 — the payload carries `$` figures, so it carries their disclosure. This one covers the
+   * whole scope, including any truncated cycles, and names the models involved so the surface can
+   * say *why* a total is incomplete; each row's own `uncostedRecords` is the same count restricted
+   * to that cycle, and the two agree exactly when nothing was truncated — when something was,
+   * `excluded.uncostedRecords` is the difference, exactly.
+   */
+  uncosted: UncostedSummary;
+}
+
+/**
+ * A-19 — the totals of the cycles the cap left out, so a screen can say how much is missing
+ * rather than only how many cycles are.
+ *
+ * ⚠️ There is deliberately **no `sessions`**: a session that spans a cycle boundary is counted in
+ * both cycles (see `BillingCycleRow.sessions`), so a sum of per-cycle session counts is not a
+ * number of sessions and must not be presented as one. Every field here is one that genuinely
+ * adds across cycles.
+ */
+export interface ExcludedCycleTotals {
+  /** How many cycles these totals cover. Equal to `truncated`, and `0` when nothing was left out. */
+  cycles: number;
+  /**
+   * How many records fell in them — costed and uncosted together, over the same population the
+   * `$` figures are computed from. `0` when nothing was left out.
+   */
+  records: number;
+  /**
+   * M-05 over those cycles, on the same all-or-nothing rule as every other `$` in the app:
+   * `null` when nothing in them could be priced (INV-09), never `0` standing in for unknown.
+   */
+  costNanoUsd: number | null;
+  /** M-06 over those cycles — the records the figure above excludes (INV-10). */
+  uncostedRecords: number;
+  /** M-02 over those cycles. */
+  outputTokens: number;
+  /** M-04's input sum over those cycles. */
+  inputTokens: number;
+  /** M-03/M-04's cache-read sum over those cycles. */
+  cacheReadTokens: number;
+  /** M-07 binding (C) over those cycles — additive, because the windows are disjoint. */
+  activeSeconds: number;
+}
+
+/** One billing cycle's totals (A-19). */
+export interface BillingCycleRow {
+  /** UTC epoch ms, INCLUSIVE — a local midnight (ADR-021). */
+  from: number;
+  /** UTC epoch ms, EXCLUSIVE — a local midnight. The last day it includes is `to - 1`. */
+  to: number;
+  /**
+   * M-05 for this cycle. ⚠️ `null` means **nothing in this cycle could be costed** — no covering
+   * price row, or nothing recorded at all. It is NEVER `0` standing in for unknown: §6.4 forbids
+   * `$0.00` for an unpriced total, and a zero that means "we do not know" is the silently wrong
+   * number this application exists to refuse (INV-09).
+   */
+  costNanoUsd: number | null;
+  /** M-06 for this cycle — the records excluded from the figure above (INV-10). */
+  uncostedRecords: number;
+  /** M-02 for this cycle, over the same population the Overview tile counts. */
+  outputTokens: number;
+  /** M-03/M-04's cache-read sum for this cycle. */
+  cacheReadTokens: number;
+  /** M-04's input sum for this cycle. */
+  inputTokens: number;
+  /**
+   * Distinct sessions with a record in this cycle — the same `COUNT(DISTINCT session_id)` the
+   * Overview tile reports for the same window.
+   *
+   * ⚠️⚠️ **A session that spans a cycle boundary is counted in BOTH cycles**, deliberately and by
+   * the same rule that counts a session spanning local midnight in both working days (M-08): a
+   * cycle in which the user worked is a cycle in which the user worked, and dropping the session
+   * from one of them would report a cycle as emptier than it was.
+   *
+   * ⚠️ **The corollary: `Σ cycles[].sessions` is NOT a number of sessions and must never be
+   * rendered as a total.** It double-counts every session that crosses a boundary. Compare the
+   * per-cycle figures against each other; for a total over a range, ask the channel that counts
+   * distinct sessions over that range.
+   */
+  sessions: number;
+  /** M-07 binding (C), restricted to this cycle — the same reading every Active-hours figure uses. */
+  activeSeconds: number;
+  /** True for the cycle the clock is inside. Its totals cover a period that has not finished. */
+  inProgress: boolean;
+  /**
+   * How many of this cycle's local calendar days have happened, counting the opening day as day 1.
+   * Equal to `totalDays` once the cycle is over. ⚠️ It exists so an in-progress cycle can say
+   * "day 4 of 31" instead of being compared as though it were complete.
+   */
+  elapsedDays: number;
+  /** How many local calendar days the whole cycle spans — 28 to 31, by the calendar. */
+  totalDays: number;
 }
 
 /** §4.5 `q:sessionHistogram` (§6.5) */
@@ -1336,6 +1521,15 @@ export interface IpcChannels {
    *  filtered token channels above; the display ratio is derived in the renderer, not here. */
   'q:contextOverhead': { req: GlobalFilter; res: ContextOverhead };
   'q:costBreakdown': { req: GlobalFilter & { by: CostBreakdownBy }; res: CostBreakdown };
+  /**
+   * §6.3 / §6.4 (A-19) — every billing cycle's totals, for comparing one against the next.
+   *
+   * ⛔ **Deliberately NOT a `GlobalFilter` channel.** It returns every cycle in the dataset by
+   * construction — the comparison is the point, and the control at the top is parked on one
+   * cycle while this card is on screen — so the request has no `from`/`to` to ignore. The
+   * project selection IS applied. Both facts are stated on screen in plain words (§1a).
+   */
+  'q:billingCycleTotals': { req: BillingCycleTotalsRequest; res: BillingCycleTotals };
   'q:sessionHistogram': { req: GlobalFilter; res: SessionHistogram };
   'q:rhythmHeatmap': { req: GlobalFilter; res: RhythmHeatmap };
   'q:workingDays': { req: GlobalFilter & Page; res: Paged<WorkingDayRow> };

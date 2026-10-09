@@ -54,6 +54,38 @@ export const EFFICIENCY_THRESHOLD_QUALITY_NOTE =
   'This compares tokens written to tokens of context — never the quality of the answers.';
 /** ⚠️ The sentence that stops the slider being read as a session-boundary control (INV-05). */
 export const IDLE_GAP_BOUNDARY_NOTE = 'This does not change session boundaries.';
+/**
+ * A-18/A-19 — the billing-cycle day, explained in plain words (§1a): what it changes, and where.
+ *
+ * ⚠️ **AMENDED after A-19, because the old sentence had become false.** It said the day set "the
+ * totals at the top of the Overview screen", which was true while a billing cycle was an
+ * Overview-only idea. A-19 made it the app's primary time filter: it decides the cycles the
+ * control at the top of every screen offers, the window every one of those screens counts over,
+ * and the boundaries both cycle-comparison cards are built on. A setting whose explanation
+ * describes a smaller effect than it has is the caption-shaped form of a wrong number — the
+ * reader believes they are changing one screen (CLAUDE.md §1a).
+ */
+export const BILLING_CYCLE_NOTE =
+  'This is the day your Claude bill starts on. Every screen is filtered by billing cycle from the' +
+  ' control at the top, and this day is where each cycle begins and ends — so the totals you see' +
+  ' cover the same period as the bill you receive.';
+/**
+ * ⚠️ A-18 — why the range stops at 28, said as a reason rather than as a rule. Every month has a
+ * 28th, so the day the cycle starts on is the same in every month and never quietly moves.
+ */
+export const BILLING_CYCLE_RANGE_NOTE =
+  'Pick a day from 1 to 28, so that it exists in every month — including February.';
+/**
+ * ⚠️ A-18 / §1a — the card's OWN refusal, in plain words. The repository's message names the
+ * setting key and its "type" (`settings-repo.ts`), which is developer vocabulary and must never
+ * reach a screen; the wire message is unchanged, it is simply not what the user is shown. It
+ * says what happened, what is still true, and what to do instead.
+ */
+export const BILLING_CYCLE_REFUSED_NOTE =
+  'That day was not saved. The totals still start on the day shown here — pick a whole number from 1 to 28.';
+/** ⚠️ A-18 — an empty field is not a choice, and pretending it was one would be a silent edit. */
+export const BILLING_CYCLE_EMPTY_NOTE =
+  'No day was typed, so nothing changed. The day shown here is the one in use.';
 export const REBUILD_WARNING =
   'Changing this rebuilds the derived cache. Your price history, settings and audit trail are kept.';
 export const ONLY_NETWORK_REQUEST_NOTE =
@@ -88,6 +120,10 @@ const THEMES: readonly { value: ThemePreference; label: string }[] = [
 const IDLE_GAP_MIN = 5;
 const IDLE_GAP_MAX = 60;
 const IDLE_GAP_STEP = 5;
+
+/** A-18 — the day-of-month range the setting accepts (§3.13, mirrored by the control). */
+const BILLING_CYCLE_DAY_MIN = 1;
+const BILLING_CYCLE_DAY_MAX = 28;
 
 /** A-12 — the flag threshold slider, in whole percent (the stored value is the fraction). */
 const EFFICIENCY_MIN_PERCENT = 5;
@@ -125,6 +161,7 @@ export function SettingsView(): JSX.Element {
         <DirectoryCard />
         <IdleGapCard />
         <EfficiencyThresholdCard />
+        <BillingCycleCard />
         <ThemeCard />
         <ResyncCard />
         {/* A-16 / §3.18 — the explicit rebuild, beside the incremental re-sync it is the opposite
@@ -420,6 +457,108 @@ function EfficiencyThresholdCard(): JSX.Element {
       {/* ⚠️ A-12 — never let it read as a quality score. */}
       <p className="text-small text-text-primary">{EFFICIENCY_THRESHOLD_QUALITY_NOTE}</p>
       {error !== null && <p className="text-small text-danger">{error.message}</p>}
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 2c — Billing cycle day (A-18)
+// ---------------------------------------------------------------------------
+
+/**
+ * A-18 — the day of the month the user's Claude bill lands, which is the day the Overview's four
+ * totals start counting from.
+ *
+ * ⚠️ **A number field rather than a slider, and out-of-range input is REJECTED rather than
+ * clamped.** A billing day is an exact fact the user already knows, so it is typed, not dragged.
+ * The stored setting accepts only 1–28 (§3.13, A-18) and refuses anything else; this control
+ * simply shows that refusal inline rather than quietly writing the nearest legal day, because a
+ * cycle that starts on a day the user did not choose would move every total on the Overview
+ * without saying so (CLAUDE.md §1). ⚠️ The refusal shown is **this card's own sentence**, never
+ * the repository's — that message names the setting key and its declared type, which is our
+ * vocabulary and not the user's (§1a).
+ */
+function BillingCycleCard(): JSX.Element {
+  const stored = useAppStore((state) => state.settings?.billingCycleDay ?? null);
+  const [draft, setDraft] = useState<string | null>(null);
+  const [error, setError] = useState<AppError | null>(null);
+  /** A refusal this control made itself, before anything was sent. Plain words, never a code. */
+  const [refusal, setRefusal] = useState<string | null>(null);
+
+  const commit = (): void => {
+    if (draft === null) return;
+    const typed = draft.trim();
+    setDraft(null);
+    // ⚠️ Every path below clears the previous attempt's message first: an error line left beside
+    // a value it does not describe is a wrong explanation, which §1a treats exactly as §1 treats
+    // a wrong number.
+    setError(null);
+    setRefusal(null);
+
+    // The field was cleared and left. Nothing was chosen, so nothing is written — and the card
+    // says so rather than silently restoring the stored day as though the user had re-picked it.
+    if (typed === '') {
+      setRefusal(BILLING_CYCLE_EMPTY_NOTE);
+      return;
+    }
+
+    // ⚠️ `Number`, never `Number.parseInt`: `parseInt('3.7', 10)` is 3, so the control would have
+    // ROUNDED the day and persisted one the user never typed, before the repository ever got the
+    // chance to refuse it. The setting is rejected, not clamped and not rounded (§3.13, A-18).
+    const parsed = Number(typed);
+    if (!Number.isInteger(parsed)) {
+      setRefusal(BILLING_CYCLE_REFUSED_NOTE);
+      return;
+    }
+
+    // A whole number is sent as typed, in range or not: the repository is the one authority on
+    // which days are legal (§3.13), and this card only translates its refusal into plain words.
+    void applySetting('billingCycleDay', parsed).then(setError);
+  };
+
+  /**
+   * §4.1 rule 2 — branch on the `code`, never on the message. `E_INVALID_SETTING` is the
+   * repository refusing the day, and the user is told that in the card's own words.
+   */
+  const message =
+    refusal ??
+    (error === null
+      ? null
+      : error.code === 'E_INVALID_SETTING'
+        ? BILLING_CYCLE_REFUSED_NOTE
+        : error.message);
+
+  return (
+    <Card id="billing-cycle" title="Billing cycle starts on">
+      <label className="flex items-center gap-4 text-small text-text-primary">
+        <span>Day of the month</span>
+        <input
+          type="number"
+          min={BILLING_CYCLE_DAY_MIN}
+          max={BILLING_CYCLE_DAY_MAX}
+          step={1}
+          data-testid="billing-cycle-day-input"
+          aria-label="Day of the month your Claude bill starts"
+          disabled={stored === null}
+          value={draft ?? (stored === null ? '' : String(stored))}
+          onChange={(event) => {
+            setDraft(event.target.value);
+          }}
+          onBlur={commit}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') commit();
+          }}
+          className="w-20 rounded-control border border-border bg-bg-surface px-2 py-1 text-small text-text-primary"
+        />
+      </label>
+      <p className="text-small text-text-muted">{BILLING_CYCLE_NOTE}</p>
+      {/* ⚠️ A-18 — the reason for the 1–28 range, so it does not read as an arbitrary limit. */}
+      <p className="text-small text-text-primary">{BILLING_CYCLE_RANGE_NOTE}</p>
+      {message !== null && (
+        <p data-testid="billing-cycle-error" className="text-small text-danger">
+          {message}
+        </p>
+      )}
     </Card>
   );
 }

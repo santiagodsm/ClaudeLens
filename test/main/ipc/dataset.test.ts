@@ -455,6 +455,52 @@ describe('§4.3 app:bootstrap', () => {
   });
 });
 
+describe('§4.5 q:billingCycleTotals — the anchor day comes from the setting (A-19)', () => {
+  const sandbox = useSandbox();
+  const dbs = useTestDatabases(sandbox);
+
+  it('resolves the cycle boundaries from `billingCycleDay`, which the caller cannot override', async () => {
+    // ⚠️ The defect this pins: the request used to carry `anchorDay`, so a renderer surface
+    // holding a settings snapshot from before the user changed their billing day would ask for
+    // cycles on the OLD boundaries while the control at the top of the app resolved the new ones
+    // — the same month showing two different totals, with nothing failing (CLAUDE.md §1). The
+    // field is gone from the request type; this test proves the day that IS used is the stored
+    // one, and that changing the setting moves every boundary in the payload.
+    const db = dbs.openMigrated();
+    const claudeDir = await makeClaudeDir(sandbox.resolve('claude'));
+    const { dataset } = service(db);
+    await dataset.boot();
+    await dataset.setSetting('claudeDir', claudeDir);
+    await dataset.settled();
+
+    // ⚠️ The day of the MONTH is asserted, not an absolute instant: a cycle opens at a local
+    // midnight (ADR-021) and this suite does not pin `TZ`, so the instant depends on the machine
+    // while "the boundary falls on the 5th" is true in every zone.
+    await dataset.setSetting('billingCycleDay', 5);
+    const onTheFifth = dataset.billingCycleTotals({ projectIds: null });
+    expect(onTheFifth.anchorDay).toBe(5);
+    expect(onTheFifth.cycles.length).toBeGreaterThan(0);
+    for (const row of onTheFifth.cycles) {
+      expect(new Date(row.from).getDate()).toBe(5);
+      expect(new Date(row.to).getDate()).toBe(5);
+    }
+
+    // The very same request, after the setting moved. Nothing about the call changed, and every
+    // boundary in the answer did.
+    await dataset.setSetting('billingCycleDay', 20);
+    const onTheTwentieth = dataset.billingCycleTotals({ projectIds: null });
+    expect(onTheTwentieth.anchorDay).toBe(20);
+    for (const row of onTheTwentieth.cycles) {
+      expect(new Date(row.from).getDate()).toBe(20);
+    }
+    expect(onTheTwentieth.cycles[0]?.from).not.toBe(onTheFifth.cycles[0]?.from);
+
+    // ⚠️ And the echoed day is the day the numbers were bucketed on, not a value copied from the
+    // request — there is no field on the request to copy it from. `settings:get` agrees.
+    expect(dataset.settingsSnapshot().billingCycleDay).toBe(20);
+  });
+});
+
 describe('§4.4 sync:start (§5.2 rules 1–2)', () => {
   const sandbox = useSandbox();
   const dbs = useTestDatabases(sandbox);

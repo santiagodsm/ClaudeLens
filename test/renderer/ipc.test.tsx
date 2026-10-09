@@ -15,6 +15,7 @@ import { stableStringify, useQuery } from '../../src/renderer/hooks/use-query';
 import { entranceProps } from '../../src/renderer/lib/motion';
 import { resolveTheme } from '../../src/renderer/hooks/use-theme';
 import { ALL_TIME_ALL_PROJECTS, useAppStore } from '../../src/renderer/store/app-store';
+import { currentBillingCycle } from '../../src/renderer/lib/billing-cycle';
 import { installBridge, resetStore, uninstallBridge } from './harness';
 
 const TILES: OverviewTiles = {
@@ -230,6 +231,11 @@ describe('store — §7.4 holds only sync, disclosures, filter and theme', () =>
             lastGlobalFilter: { projectIds: [4], from: 100, to: 200 },
             sidebarCollapsed: true,
             reduceMotionOverride: 'full' as const,
+            retainOrphanedHistory: true,
+            efficiencyDropThreshold: 0.4,
+            billingCycleDay: 15,
+            // A-19 — the app opens on the billing cycle the clock is in.
+            lastRangeChoice: 'cycle:current' as const,
           },
           dirStatus: 'valid' as const,
           sync: {
@@ -275,7 +281,17 @@ describe('store — §7.4 holds only sync, disclosures, filter and theme', () =>
     expect(state.theme).toBe('dark');
     expect(state.reduceMotion).toBe('full');
     expect(state.sidebarCollapsed).toBe(true);
-    expect(state.filter).toEqual({ projectIds: [4], from: 100, to: 200 });
+    /**
+     * ⚠️ A-19 — the stored filter's PROJECTS are restored and its DATES are not.
+     *
+     * `lastGlobalFilter` holds absolute epoch ms, so restoring its dates would reopen the app on
+     * whatever window was last on screen — including a billing cycle that has closed since, under
+     * a control still calling it the current one (CLAUDE.md §1). The dates come from
+     * `lastRangeChoice`, resolved against this launch's clock.
+     */
+    const cycle = currentBillingCycle(15, Date.now());
+    expect(state.filter).toEqual({ projectIds: [4], from: cycle.from, to: cycle.to });
+    expect(state.filter.from).not.toBe(100);
     expect(state.disclosures?.uncosted.records).toBe(7);
 
     // §7.4 — nothing resembling a result set is stored.
